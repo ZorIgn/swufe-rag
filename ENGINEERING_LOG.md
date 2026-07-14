@@ -176,3 +176,12 @@ OK
 - 功能提交：`dbcc1c0 feat: refine RAG pipeline and add debug workbench`。
 - 本地合并：`79053ba merge: deliver refined RAG and debug workbench`。
 - 远端交付：2026-07-14 已将 `origin/main` 从 `53405f1` 推送到 `79053ba`；本节随紧接的文档提交同步推送。
+## 2026-07-14：新电脑续接交付
+
+为迁移到新电脑继续开发，新增：
+
+- `handoff/CONTINUATION_PROMPT.md`：自包含的续接提示词，明确已完成、未完成、冻结接口、测试和 Git 工作流。
+- `handoff/NEW_COMPUTER_SETUP.md`：要求从 GitHub 主仓重新 `git clone`，禁止在无历史源码快照中直接 `git init`。
+- `handoff/DELIVERY_MANIFEST.md`：定义外部交付 ZIP 的结构和验收要求。
+
+外部交付 ZIP 另外包含当前已提交 HEAD 的 `git archive` 源码快照、原始《西南财大教务RAG问答系统项目计划书.docx》、SHA-256 校验清单和起步说明。计划书保持原样且不提交 Git；正式继续开发始终以 `origin/main` 最新历史为准。
