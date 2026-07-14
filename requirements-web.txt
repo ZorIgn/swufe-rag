@@ -1,0 +1,5 @@
+# Lightweight deterministic Demo/Web runtime. Install requirements.txt as well for production BGE/FAISS.
+numpy>=1.26,<3
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30,<1
+httpx>=0.27,<1

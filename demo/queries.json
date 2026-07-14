@@ -1,0 +1,22 @@
+[
+  {"id":"q01","question":"我挂过科，后来重修通过了还能保研吗？","college":"计算机与人工智能学院","cohort":"2023","expected_chunk_ids":["fixture_it_recommend_013","fixture_school_status_001"],"category":"跨文件政策","should_refuse":false},
+  {"id":"q02","question":"计算机2023级毕业要修满多少学分？","college":"计算机与人工智能学院","cohort":"2023","expected_chunk_ids":["fixture_it_py2023_007"],"category":"培养方案","should_refuse":false},
+  {"id":"q03","question":"CS205是什么课，多少学分？","college":"计算机与人工智能学院","cohort":"2023","expected_chunk_ids":["fixture_it_table_011"],"category":"表格课程","should_refuse":false},
+  {"id":"q04","question":"AI101属于什么课程？","college":"计算机与人工智能学院","cohort":"2024","expected_chunk_ids":["fixture_it_table_012"],"category":"表格课程","should_refuse":false},
+  {"id":"q05","question":"计算机学院推免综合成绩怎么计算？","college":"计算机与人工智能学院","cohort":"2023","expected_chunk_ids":["fixture_it_recommend_013"],"category":"推免细则","should_refuse":false},
+  {"id":"q06","question":"金融学2023级毕业要求是多少学分？","college":"金融学院","cohort":"2023","expected_chunk_ids":["fixture_fin_py2023_015"],"category":"培养方案","should_refuse":false},
+  {"id":"q07","question":"FIN201公司金融是多少学分？","college":"金融学院","cohort":"2023","expected_chunk_ids":["fixture_fin_table_018"],"category":"表格课程","should_refuse":false},
+  {"id":"q08","question":"金融科技算专选吗？","college":"金融学院","cohort":"2023","expected_chunk_ids":["fixture_fin_table_018"],"category":"口语查询","should_refuse":false},
+  {"id":"q09","question":"金融学院推免学业成绩占多少？","college":"金融学院","cohort":"2023","expected_chunk_ids":["fixture_fin_recommend_019"],"category":"推免细则","should_refuse":false},
+  {"id":"q10","question":"课程替代需要谁审核？","college":"计算机与人工智能学院","cohort":"2023","expected_chunk_ids":["fixture_school_credit_004"],"category":"校级规定","should_refuse":false},
+  {"id":"q11","question":"申请转专业需要完成什么？","college":"金融学院","cohort":"2023","expected_chunk_ids":["fixture_school_transfer_003"],"category":"校级规定","should_refuse":false},
+  {"id":"q12","question":"辅修学分能重复算到主修毕业学分吗？","college":"金融学院","cohort":"2023","expected_chunk_ids":["fixture_school_minor_021"],"category":"校级规定","should_refuse":false},
+  {"id":"q13","question":"因健康原因可以休学吗？","college":"计算机与人工智能学院","cohort":"2024","expected_chunk_ids":["fixture_school_leave_022"],"category":"学籍规定","should_refuse":false},
+  {"id":"q14","question":"计算机2023级专业实习是多少学分？","college":"计算机与人工智能学院","cohort":"2023","expected_chunk_ids":["fixture_it_practice_023"],"category":"实践教学","should_refuse":false},
+  {"id":"q15","question":"金融2023级实习至少几周？","college":"金融学院","cohort":"2023","expected_chunk_ids":["fixture_fin_practice_024"],"category":"实践教学","should_refuse":false},
+  {"id":"q16","question":"食堂晚上几点关门？","college":"计算机与人工智能学院","cohort":"2023","expected_chunk_ids":[],"category":"库外问题","should_refuse":true},
+  {"id":"q17","question":"校园网密码忘了怎么办？","college":"金融学院","cohort":"2024","expected_chunk_ids":[],"category":"库外问题","should_refuse":true},
+  {"id":"q18","question":"明天天气怎么样？","college":"计算机与人工智能学院","cohort":"2025","expected_chunk_ids":[],"category":"库外问题","should_refuse":true},
+  {"id":"q19","question":"金融2023级要修170学分吗？","college":"金融学院","cohort":"2023","expected_chunk_ids":["fixture_fin_py2023_015"],"category":"范围污染陷阱","should_refuse":false},
+  {"id":"q20","question":"计算机2023级的金融科技是专业选修吗？","college":"计算机与人工智能学院","cohort":"2023","expected_chunk_ids":[],"category":"跨学院污染陷阱","should_refuse":true}
+]

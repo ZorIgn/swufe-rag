@@ -1,0 +1,26 @@
+paths:
+  chunks: data/chunks.jsonl
+  artifacts: artifacts
+
+retrieval:
+  embed_model: BAAI/bge-large-zh-v1.5
+  query_prefix: "为这个句子生成表示以用于检索相关文章："
+  top_k: 5
+  candidate_k: 20
+  use_bm25: true
+  use_reranker: true
+  rerank_model: BAAI/bge-reranker-base
+  dense_weight: 0.35
+  lexical_weight: 0.25
+  rerank_weight: 0.35
+  rank_prior_weight: 0.05
+  mmr_lambda: 0.88
+
+generation:
+  llm: deepseek-chat
+  temperature: 0
+  refuse_th: 0.35
+  max_retries: 2
+  request_timeout_seconds: 60
+  max_context_chars: 7000
+  max_chunk_chars: 1600

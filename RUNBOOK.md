@@ -45,7 +45,7 @@ python -m retrieval.index --chunks data/chunks.jsonl --artifacts artifacts
 ## B 模块调用
 
 ```python
-from retrieval.retriever import retrieve
+from swufe_rag.api import retrieve
 
 chunks = retrieve(
     "我重修通过后还能申请推免吗",
@@ -76,7 +76,7 @@ generation:
 调用方式：
 
 ```python
-from generation.service import answer
+from swufe_rag.api import answer
 
 result = answer("我重修通过后还能申请推免吗", chunks)
 ```
@@ -110,3 +110,50 @@ D 负责添加 `retrieved` 摘要、`latency_ms` 和 HTTP 状态，不能改变 
 - 大型原始文档和索引在确定 Git LFS/发布附件策略前不提交。
 - 禁止对 `main` 强制推送。
 
+## 调试 Web
+
+安装含 Web 调试依赖的环境：
+
+```powershell
+pip install -r requirements-web.txt
+python -m app.debug_server
+```
+
+访问 <http://127.0.0.1:8000>。调试接口统一位于 `/api/debug`：
+
+- `GET /api/debug/health`
+- `GET /api/debug/options`
+- `GET /api/debug/examples`
+- `POST /api/debug/retrieve`
+- `POST /api/debug/ask`
+- `GET /api/debug/source/{chunk_id}`
+
+调试层可返回 `retrieved`、`latency_ms` 和 `mode`，但这些字段不进入 `swufe_rag.api.answer()` 的冻结返回对象。正式 D 模块可以迁移 HTTP 路径，但应继续复用统一 Python 门面。
+
+## 高级 B/C 配置
+
+`config.advanced.yaml` 增加候选窗口、标题与条款词权重、可选 BGE reranker、MMR、多源上下文预算和严格引用校验。生产默认仍使用：
+
+- `BAAI/bge-large-zh-v1.5`
+- `BAAI/bge-reranker-base`（可关闭）
+- `refuse_th: 0.35`
+- `temperature: 0`
+
+拒答门槛是硬约束：最高余弦分数低于 0.35 时不调用 LLM，课程代码或关键词命中不能绕过它。真实数据到位后只能依据独立开发集校准阈值，并同步记录依据。
+
+## Demo 评估
+
+```powershell
+python -m eval.demo_eval
+```
+
+`demo/queries.json` 含 20 题，覆盖培养方案、课程代码、表格数字、校级与院级政策、口语表达、库外问题和跨学院污染陷阱。当前基线为 Recall@5 100%、范围污染 0、拒答准确率 100%。
+
+## 参考实现研究
+
+本轮设计研究了以下开源项目的检索和引用思路，未复制其业务代码：
+
+- Langchain-Chatchat：<https://github.com/chatchat-space/Langchain-Chatchat/tree/49165d6af4438aa7e8a1f71ce276db55f4405151>
+- RAGFlow：<https://github.com/infiniflow/ragflow/tree/22dd1ad401d239a3b8a934ca8098937b4c5b58d8>
+
+采用的通用模式包括扩大候选窗口、混合召回、二阶段重排、MMR 去冗余、上下文预算、句级引用校验和失败闭合。具体取舍与验证证据见 `ENGINEERING_LOG.md`。

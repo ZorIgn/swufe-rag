@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>swufe-rag · 证据调试台</title>
+  <link rel="stylesheet" href="/assets/debug.css">
+</head>
+<body>
+  <header class="masthead">
+    <div class="brand-block">
+      <p class="eyebrow">SWUFE · RAG / DEBUG BUILD 02</p>
+      <h1>证据调试台</h1>
+    </div>
+    <div class="system-state" aria-live="polite">
+      <span class="state-lamp" id="stateLamp"></span>
+      <div>
+        <strong id="systemMode">正在连接</strong>
+        <span id="systemMeta">读取知识库状态…</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="workbench">
+    <section class="query-bay" aria-labelledby="queryTitle">
+      <div class="section-heading">
+        <span class="section-index">01</span>
+        <div><h2 id="queryTitle">查询与范围</h2><p>先限定适用范围，再观察证据链。</p></div>
+      </div>
+
+      <form id="queryForm">
+        <label for="question">政策问题</label>
+        <textarea id="question" name="question" rows="5" maxlength="1000" placeholder="例如：我挂过科，重修通过后还能申请推免吗？" required></textarea>
+        <div class="field-row">
+          <div>
+            <label for="college">学院</label>
+            <select id="college" name="college"></select>
+          </div>
+          <div>
+            <label for="cohort">入学年级</label>
+            <select id="cohort" name="cohort"></select>
+          </div>
+        </div>
+        <div class="range-field">
+          <div class="range-label"><label for="topK">返回条数</label><output id="topKValue">5</output></div>
+          <input id="topK" name="topK" type="range" min="1" max="10" value="5">
+        </div>
+        <div class="action-row">
+          <button class="primary-action" type="submit" id="askButton">运行完整链路 <kbd>Ctrl ↵</kbd></button>
+          <button class="secondary-action" type="button" id="retrieveButton">仅检索</button>
+        </div>
+      </form>
+
+      <div class="examples">
+        <div class="subhead"><h3>测试探针</h3><button id="shuffleExamples" type="button">换一组</button></div>
+        <div id="exampleList" class="example-list"></div>
+      </div>
+    </section>
+
+    <section class="answer-bay" aria-labelledby="answerTitle">
+      <div class="section-heading compact">
+        <span class="section-index">02</span>
+        <div><h2 id="answerTitle">受约束回答</h2><p id="runSummary">尚未运行</p></div>
+        <button class="text-action" id="copyJson" type="button" disabled>复制 JSON</button>
+      </div>
+      <div id="answerState" class="empty-state">
+        <span class="empty-glyph">[ ]</span>
+        <h3>等待证据</h3>
+        <p>运行问题后，这里只展示通过引用校验的回答。灰色拒答同样是有效结果。</p>
+      </div>
+      <article id="answerContent" class="answer-content" hidden></article>
+
+      <div class="evidence-heading">
+        <h3>引用证据</h3>
+        <span id="citationCount">0 条</span>
+      </div>
+      <div id="citationList" class="citation-list" aria-live="polite"></div>
+    </section>
+
+    <aside class="source-bay" aria-labelledby="sourceTitle">
+      <div class="section-heading compact">
+        <span class="section-index">03</span>
+        <div><h2 id="sourceTitle">原文检查</h2><p>点击引用或召回块查看完整条款。</p></div>
+      </div>
+      <div id="sourcePanel" class="source-empty">
+        <span>NO SOURCE SELECTED</span>
+        <p>原文始终由 chunk_id 回查，不从模型回答反推。</p>
+      </div>
+    </aside>
+
+    <section class="retrieval-ledger" aria-labelledby="ledgerTitle">
+      <div class="ledger-head">
+        <div class="section-heading compact">
+          <span class="section-index">04</span>
+          <div><h2 id="ledgerTitle">召回账本</h2><p>融合排序在前，score 保留为 BGE 余弦相似度。</p></div>
+        </div>
+        <div class="legend"><span><i class="scope-school"></i>校级</span><span><i class="scope-college"></i>院级</span></div>
+      </div>
+      <div id="retrievalTable" class="retrieval-empty">暂无检索记录</div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="/assets/debug.js" defer></script>
+</body>
+</html>
