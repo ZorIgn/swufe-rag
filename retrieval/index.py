@@ -110,7 +110,12 @@ def build_index(
     *,
     allow_test_backend: bool = False,
 ) -> dict[str, Any]:
-    """Build artifacts, writing the manifest last as the commit marker."""
+    """Build artifacts, writing the manifest last as the commit marker.
+
+    ``allow_test_backend`` deliberately selects the NumPy test backend.  Tests
+    must not silently become production FAISS builds merely because faiss-cpu
+    happens to be installed in the current environment.
+    """
 
     source = Path(chunks_path)
     artifacts = Path(artifacts_dir)
@@ -121,7 +126,7 @@ def build_index(
             f"encoder returned {embeddings.shape}; expected ({len(chunks)}, {encoder.dimension})"
         )
 
-    faiss = _import_faiss()
+    faiss = None if allow_test_backend else _import_faiss()
     if faiss is None and not allow_test_backend:
         raise KnowledgeBaseNotReadyError(
             "faiss-cpu is required to build production artifacts; install requirements.txt"
@@ -143,6 +148,10 @@ def build_index(
         temporary_index = artifacts / (FAISS_FILE + ".tmp")
         faiss.write_index(index, str(temporary_index))
         os.replace(temporary_index, artifacts / FAISS_FILE)
+    else:
+        stale_faiss = artifacts / FAISS_FILE
+        if stale_faiss.exists():
+            stale_faiss.unlink()
 
     manifest = {
         "contract_version": CONTRACT_VERSION,
