@@ -107,7 +107,7 @@ def create_app(runtime: RAGRuntime | None = None):
     @debug_app.post("/api/debug/ask")
     def ask(request: QueryRequest):
         try:
-            return get_runtime().ask(
+            return get_runtime().debug_ask(
                 request.question,
                 top_k=request.top_k,
                 college=request.college,

@@ -90,7 +90,21 @@ chunks = retrieve(question, top_k, college, cohort)
 result = answer(question, chunks)
 ```
 
-D 负责添加 `retrieved` 摘要、`latency_ms` 和 HTTP 状态，不能改变 B、C 冻结返回结构。`GET /source/{chunk_id}` 应直接读取知识块存储。
+D 负责添加 `retrieved` 摘要、`latency_ms` 和 HTTP 状态，不能改变 B、C 冻结返回结构。`GET /source/{chunk_id}` 直接读取经过契约校验的知识块存储。
+
+正式 HTTP 适配层已实现。只有真实知识库和索引到位后才启动：
+
+```powershell
+python -m app.server
+```
+
+接口：
+
+- `POST /ask`：请求只接收 `question`、`college`、`cohort`；
+- `GET /source/{chunk_id}`：返回完整知识块，不带检索分数；
+- 数据、索引未就绪或 LLM 不可用时返回 `503`；
+- 非法业务参数返回 `400`，未知 `chunk_id` 返回 `404`；
+- 正式服务不会因 `SWUFE_RAG_MODE=demo` 或其他调试配置而加载 fixture。
 
 ## 真实数据验收
 
@@ -119,7 +133,7 @@ pip install -r requirements-web.txt
 python -m app.debug_server
 ```
 
-访问 <http://127.0.0.1:8000>。调试接口统一位于 `/api/debug`：
+访问 <http://127.0.0.1:8000>。调试接口统一位于 `/api/debug`，与正式 `app.server` 分开启动：
 
 - `GET /api/debug/health`
 - `GET /api/debug/options`

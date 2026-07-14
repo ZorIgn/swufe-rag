@@ -185,3 +185,56 @@ OK
 - `handoff/DELIVERY_MANIFEST.md`：定义外部交付 ZIP 的结构和验收要求。
 
 外部交付 ZIP 另外包含当前已提交 HEAD 的 `git archive` 源码快照、原始《西南财大教务RAG问答系统项目计划书.docx》、SHA-256 校验清单和起步说明。计划书保持原样且不提交 Git；正式继续开发始终以 `origin/main` 最新历史为准。
+
+## 2026-07-14：新环境接管审计与正式 HTTP 边界
+
+### 接管审计
+
+- 按 `START_HERE.txt` 校验交付包，9 项 SHA-256 全部匹配。
+- 从 `https://github.com/ZorIgn/swufe-rag.git` 重新 clone；接管时 `origin/main` HEAD 为 `b284de2be51ea88ae93322741bf3c13c65797d5d`，`8007637` 是其祖先。
+- 原始计划书以只读方式提取并逐页检查，共 12 页；接口、模块分工、验收指标与仓库交接文档一致。
+- `shixun.rar` 是包含 `.git`、旧 `.venv`、缓存和交付包的旧工作目录快照；其中 `main` 同样指向 `b284de2`。它只用于审计，没有被当作正式仓库或运行环境。
+- 正式 `data/chunks.jsonl` 仍为空，`data/sources.csv` 只有表头，真实知识库尚未到位。
+
+### B 索引后端隔离修复
+
+完整安装 `requirements-dev.txt` 与 `requirements-web.txt` 后，原有两项索引测试因本机存在 `faiss-cpu` 而失败：测试构建函数意外生成生产 FAISS 后端，无法验证测试专用 NumPy 索引的拒载边界。
+
+修正后：
+
+- `allow_test_backend=True` 明确选择 `numpy-test-only`，不再受当前环境是否安装 FAISS 影响；
+- 测试构建会清理同目录残留的 `index.faiss`；
+- 生产构建仍强制使用 FAISS，测试专用清单仍会被生产加载器拒绝。
+
+### 正式 HTTP 适配层
+
+- 新增 `app.server`：实现计划书契约 4 的 `POST /ask` 和 `GET /source/{chunk_id}`。
+- 生产运行时通过 `swufe_rag.api.retrieve/answer` 复用冻结 B/C 门面，不向 B/C 返回对象增加 HTTP、耗时或调试字段。
+- D 层响应增加 `retrieved` 摘要和 `latency_ms`；正式响应不包含调试 `mode`。
+- 正式请求不接受调试专用 `top_k`；调试 Web 继续使用隔离的 `/api/debug/*`。
+- 生产运行时不回退到 `tests/fixtures`，知识库、索引或 LLM 未就绪时显式失败。
+
+### 验证证据
+
+```text
+python -m unittest discover -s . -p "test*.py" -v
+Ran 67 tests ... OK (skipped=2)
+
+RUN_FAISS_SMOKE=1 python -m unittest tests.retrieval.test_production_smoke -v
+FAISS artifact backend: OK
+BGE download smoke: skipped by design
+
+python -m eval.demo_eval
+Recall@5=1.0, scope_pollution_count=0, refusal_accuracy=1.0
+```
+
+本地受控环境为 Python 3.12.13；GitHub Actions 继续使用 Python 3.10 验证兼容性。FastAPI 测试出现上游 `httpx`/Starlette 弃用警告，但不影响当前结果。
+
+### 仍未完成
+
+- 真实文件采集、解析、切分、人工抽检、BGE 编码和正式索引；
+- 真实检索开发集、阈值校准、B/C 参数调优和独立 30～40 题验收；
+- 正式服务的认证、限流、审计、隐私处理、结构化日志、容器化、部署和监控；
+- 最终学生端前端、团队联调、报告与答辩材料。
+
+本轮开发分支：`feature/production-api-boundary`。本节随本轮本地提交记录；尚未推送或合并到远端。

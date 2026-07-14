@@ -99,7 +99,7 @@ from swufe_rag.api import retrieve
 from swufe_rag.api import answer
 ```
 
-### 3. Demo、评估和调试 Web
+### 3. Demo、评估、调试 Web 和正式 HTTP 适配层
 
 已完成：
 
@@ -110,13 +110,16 @@ from swufe_rag.api import answer
 - 静态证据调试台：范围、回答、引用、原文、召回账本、分数和耗时；
 - 桌面和移动端浏览器验收；
 - 正常回答、来源回查和跨学院拒答测试。
+- 计划书契约 4 的 `POST /ask` 与 `GET /source/{chunk_id}`；
+- 生产入口只复用 `swufe_rag.api`，不自动加载 fixture；
+- 正式响应与 `/api/debug` 调试扩展字段隔离。
 
 当前模拟基线：
 
 - Recall@5：100%；
 - 范围污染：0；
 - 20 题拒答准确率：100%；
-- 完整测试：60 项通过，2 项真实模型下载型测试按设计跳过。
+- 完整测试：67 项通过，2 项真实模型下载型测试按设计跳过；真实 FAISS 后端另行冒烟通过。
 
 这些结果只证明模拟流程和契约正确，不能当作真实政策质量验收。
 
@@ -161,13 +164,12 @@ from swufe_rag.api import answer
 
 未完成：
 
-- 计划书 D 模块的正式 `/ask` 和 `/source/{chunk_id}`；
 - 认证、限流、审计、隐私处理和结构化日志；
 - 正式生产配置、容器化、部署和监控；
 - 最终学生端前端；
 - 与队友 A/D 模块的最终联调。
 
-当前 `/api/debug` 仅用于本地调试，不能擅自当成最终外部接口。
+当前 `/api/debug` 仅用于本地调试，不能擅自当成最终外部接口。`app.server` 已提供正式路由的可复用适配层，但在真实数据、认证、部署和监控完成前仍不能视为生产服务。
 
 ## 五、不可破坏的公共约束
 
@@ -273,6 +275,12 @@ python -m app.debug_server
 ```
 
 打开 <http://127.0.0.1:8000>。
+
+真实知识库和索引到位后启动正式 HTTP 适配层：
+
+```powershell
+python -m app.server
+```
 
 真实 BGE/FAISS 冒烟测试默认跳过，只有依赖和网络准备好后才启用：
 
