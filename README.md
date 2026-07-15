@@ -86,6 +86,7 @@ python -m eval.hybrid_route_eval
 
 ## 工程资料
 
+- [API_REFERENCE.md](API_REFERENCE.md)：全部正式、调试、Python、CLI、数据和配置接口。
 - [RUNBOOK.md](RUNBOOK.md)：安装、索引构建、调试 Web 和团队对接命令。
 - [INTERFACES.md](INTERFACES.md)：冻结的知识块、B、C 接口契约。
 - [ENGINEERING_LOG.md](ENGINEERING_LOG.md)：研究依据、实现决策、测试证据、限制与真实数据补齐步骤。

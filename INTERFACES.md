@@ -1,6 +1,7 @@
 # swufe-rag 公共接口契约 v1.1
 
 公共字典使用严格字段集合，运行时校验和类型定义见 `contracts.py`。
+当前全部 HTTP、Python、CLI、数据和配置入口见 [API_REFERENCE.md](API_REFERENCE.md)。
 
 ## 模块 A 来源登记
 
