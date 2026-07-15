@@ -46,8 +46,53 @@ class ContextBuilder:
         normalized = normalize_query(passage).upper().replace("-", "").replace(" ", "")
         code_hits = sum(code in normalized for code in analysis.course_codes)
         article_hits = sum(article in passage for article in analysis.article_refs)
-        number_hits = sum(number in passage for number in analysis.numbers)
-        score = coverage + code_hits * 2.0 + article_hits * 1.2 + number_hits * 0.35
+        number_hits = sum(
+            number in passage
+            for number in analysis.numbers
+            if not re.fullmatch(r"(?:19|20)\d{2}", number)
+        )
+        intent = 0.0
+        if re.search(r"最迟|什么时候|多久|时间", analysis.normalized) and re.search(
+            r"\d|小时|工作日|日前|月前|周前|学期前|开考前", passage
+        ):
+            intent += 1.0
+        if re.search(
+            r"多少|几分|比例|学分|分数|怎么计算|怎么算", analysis.normalized
+        ) and re.search(r"\d|%|％|×|=|学分|分", passage):
+            intent += 0.8
+        if re.search(r"怎么计算|怎么算", analysis.normalized) and re.search(
+            r"%|％|×|=|构成|占比", passage
+        ):
+            intent += 1.0
+        if re.search(r"进考场|进入考场|迟到", analysis.normalized) and re.search(
+            r"未进入考场|取消.*考试资格", passage
+        ):
+            intent += 1.2
+        if "什么时候" in analysis.normalized and re.search(
+            r"期中|期末|学期|大一|大二", passage
+        ):
+            intent += 1.0
+        if re.search(r"多少门|几门", analysis.normalized) and re.search(
+            r"\d+\s*门", passage
+        ):
+            intent += 1.2
+        if "最长学习年限" in analysis.normalized and re.search(
+            r"最长为|最长学习年限.*\d", passage
+        ):
+            intent += 1.5
+        header_only = len(passage) < 150 and (
+            re.fullmatch(r"《[^》]+》[^。！？；;]*", passage)
+            or re.fullmatch(r"下表为.{0,120}的原表[:：]", passage)
+        )
+        header_penalty = 2.0 if header_only else 0.0
+        score = (
+            coverage
+            + code_hits * 2.0
+            + article_hits * 1.2
+            + number_hits * 0.35
+            + intent
+            - header_penalty
+        )
         return score, len(passage)
 
     def _excerpt(self, analysis: QueryAnalysis, text: str, limit: int) -> str:

@@ -149,10 +149,34 @@ class AdvancedRetriever:
         college: str | None = None,
         cohort: str | None = None,
     ) -> list[RetrievedChunk]:
+        return self.retrieve_scoped(
+            query,
+            top_k=top_k,
+            college=college,
+            cohort=cohort,
+        )
+
+    def retrieve_scoped(
+        self,
+        query: str,
+        top_k: int = 5,
+        college: str | None = None,
+        cohort: str | None = None,
+        *,
+        policy_year: int | None = None,
+        topic: str | None = None,
+    ) -> list[RetrievedChunk]:
         analysis = analyze_query(query)
         window = min(50, max(self.tuning.candidate_k, top_k * 4))
         candidates = self._deduplicate(
-            self.core.retrieve(analysis.expanded, window, college, cohort)
+            self.core.retrieve_scoped(
+                analysis.expanded,
+                window,
+                college,
+                cohort,
+                policy_year=policy_year,
+                topic=topic,
+            )
         )
         if not candidates:
             return []

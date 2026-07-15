@@ -238,3 +238,40 @@ Recall@5=1.0, scope_pollution_count=0, refusal_accuracy=1.0
 - 最终学生端前端、团队联调、报告与答辩材料。
 
 本轮开发分支：`feature/production-api-boundary`。本节随本轮本地提交记录；尚未推送或合并到远端。
+
+## 2026-07-15：混合对话、可信路由与 SQLite 来源硬约束
+
+### 需求与边界
+
+按《西南财大混合对话与可信RAG路由改造方案》完成双路由改造：普通聊天、编程、写作和情绪交流走 `general_chat`；任何需要西南财经大学真实制度、培养方案、推免、选课、校内事实或官方网址的问题走 `school_rag`。原有 `retrieve(query, top_k=5, college=None, cohort=None)` 和 `answer(query, chunks)` 签名、字段集合和拒答门保持不变。
+
+学校分支证据不足时不回退通用模型。通用分支不执行检索，也不受 `refuse_th` 影响。路由失败时，明确学校事实仍由确定性安全规则送入 RAG，其余输入默认普通对话。
+
+### 实现
+
+- 新增 `swufe_rag.routing`：严格 `RouteDecision`、仅输出 JSON 的可注入 LLM 分类器、高精度确定性规则和连续追问重写。
+- 新增 `swufe_rag.orchestration.HybridRuntime`：先路由，再且仅再执行一个回答分支；`session_id` 保存上一轮模式、意图、学院、年级和改写问题。
+- 新增 `generation/general_chat.py`：普通提示词与普通历史独立于学校 RAG 提示词，避免两个模式共享约束或学校上下文。
+- 新增 `storage`：SQLite `sources/chunks` 表使用 `CHECK/NOT NULL/UNIQUE/FK`；来源必须处于可信、启用状态，学院、年级、年份、主题在排序前用参数化 SQL 生成 `embedding_row` 候选集。
+- 默认只查现行来源；用户明确询问某政策年份时按该年份选择，允许审阅历史版本，不会同时强制 `status=现行`。
+- 新增 `retrieve_scoped()` 作为混合编排的附加门面；冻结 `retrieve()` 仍调用同一 SQL 过滤层，但签名和返回不变。
+- 生成后只接受本次检索集合内的 `chunk_id`，并再次检查 `quote in database_chunk.text`。标题、条款、页面 URL 和附件 URL 全部从 SQLite 重建，模型返回的伪造 URL 被丢弃；学校正文直接包含 URL 时验证失败。
+- 正式 `/ask` 增加 `mode`、`official_links` 和可选 `session_id`；新增 `/options` 和混合对话测试 Web。内部路由置信度、原因和证据门仍不进入正式响应。
+- `data/metadata.sqlite3` 是按来源和知识块 SHA-256 自动重建的本地产物，已加入 Git 忽略。
+
+### 测试与指标
+
+- 新增 `eval/hybrid_route_queries.json` 共 100 题：40 题普通对话、40 题学校事实、20 题连续追问。
+- `python -m eval.hybrid_route_eval`：普通问题误拦截率 `0.0`，学校事实流入通用模型 `0`，连续追问准确率 `1.0`。
+- 正式 BGE/FAISS 专项 20 题：Recall@5 `1.0`、范围污染 `0`、EvidenceGate 拒答准确率 `1.0`、Top-5 关键原文支持率 `1.0`；单纯 `0.35` 分数阈值拒答准确率 `0.85`，说明实体/范围门仍不可删除。
+- SQL 测试覆盖跨学院、跨年级、历史状态、`trusted=0`、`enabled=0`、外键/枚举约束和注入字符串参数化。
+- 编排测试覆盖普通问题零检索、学校无证据零通用回退、恶意 URL 重绑定、连续追问、缺年级澄清和生产 HTTP 字段隔离。
+- 全量 `unittest`：114 项通过，2 项需显式启用的 BGE/FAISS 冒烟测试按设计跳过；Python 编译检查和两份前端 JavaScript 语法检查通过。
+- 未运行真实 LLM 生成质量评估：当前环境仍未配置 `OPENAI_API_KEY`，没有用 Demo 客户端伪装真实生成指标。
+
+### 已知限制
+
+- 当前 `session_id` 状态保存在单进程内存中；多实例部署前需替换为 Redis 或带 TTL 的共享会话存储。
+- 路由 100 题是开发集，不替代独立盲测；新增学院、政策主题和真实学生问法后应扩充评估集。
+- 认证、限流、隐私审计、结构化日志、容器化和监控仍未实现。
+- 本轮只做本地提交，不推送、不合并远端。

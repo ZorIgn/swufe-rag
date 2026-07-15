@@ -19,6 +19,7 @@ from generation.llm import LLMClient, OpenAICompatibleClient
 from generation.prompts import REFUSAL_TEXT
 from retrieval.query import (
     analyze_query,
+    cohort_specific_coverage,
     entity_coverage,
 )
 
@@ -48,6 +49,8 @@ class EvidenceGate:
             return False
         analysis = analyze_query(query)
         if not entity_coverage(analysis, chunks):
+            return False
+        if not cohort_specific_coverage(analysis, chunks):
             return False
         return True
 

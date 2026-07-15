@@ -1,0 +1,22 @@
+[
+  {"id":"real_q01","question":"缓考申请最迟什么时候提交？","college":"计算机与人工智能学院","cohort":"2024","expected_docs":["西南财经大学本科学生缓考规定"],"answer_must_contain":["开考前 2 小时"],"category":"缓考","should_refuse":false},
+  {"id":"real_q02","question":"缓考没审核通过就缺考会怎么处理？","college":"计算机与人工智能学院","cohort":"2024","expected_docs":["西南财经大学本科学生缓考规定"],"answer_must_contain":["旷考"],"category":"缓考","should_refuse":false},
+  {"id":"real_q03","question":"参加期末考试必须带哪些证件？","college":"计算机与人工智能学院","cohort":"2024","expected_docs":["西南财经大学学生考试规则（2024年12月修订）"],"answer_must_contain":["有效身份证件","准考证"],"category":"考试规则","should_refuse":false},
+  {"id":"real_q04","question":"考试开始30分钟后还能进考场吗？","college":"计算机与人工智能学院","cohort":"2024","expected_docs":["西南财经大学学生考试规则（2024年12月修订）"],"answer_must_contain":["取消其考试资格"],"category":"考试规则","should_refuse":false},
+  {"id":"real_q05","question":"本科课程平时成绩和期末成绩比例是多少？","college":"计算机与人工智能学院","cohort":"2024","expected_docs":["西南财经大学本科课程考核管理办法"],"answer_must_contain":["30-70%","70-30%"],"category":"课程考核","should_refuse":false},
+  {"id":"real_q06","question":"哪些情况下本科生不得转学？","college":"计算机与人工智能学院","cohort":"2024","expected_docs":["西南财经大学本科生转学管理办法（2025年6月修订）"],"answer_must_contain":["入学未满一学期","无正当转学理由"],"category":"转学","should_refuse":false},
+  {"id":"real_q07","question":"申请转专业前必须修完哪些课程？","college":"计算机与人工智能学院","cohort":"2024","expected_docs":["西南财经大学本科生转专业管理办法（2024年7月修订）"],"answer_must_contain":["第一学年全部必修课程"],"category":"转专业","should_refuse":false},
+  {"id":"real_q08","question":"大学英语六级604分可以申请公共英语免修吗？","college":"计算机与人工智能学院","cohort":"2024","expected_docs":["西南财经大学本科生公共英语课程免修实施办法"],"answer_must_contain":["604分及以上"],"category":"英语免修","should_refuse":false},
+  {"id":"real_q09","question":"学校认可的艺术选修课程一共有多少门？","college":"计算机与人工智能学院","cohort":"2024","expected_docs":["关于艺术选修课程学分认定的情况说明"],"answer_must_contain":["85门"],"category":"艺术学分","should_refuse":false},
+  {"id":"real_q10","question":"数字课程学分和线下课程学分效力一样吗？","college":"计算机与人工智能学院","cohort":"2024","expected_docs":["西南财经大学数字课程建设与学分认定管理办法"],"answer_must_contain":["同等效力"],"category":"数字课程","should_refuse":false},
+  {"id":"real_q11","question":"本科生在C级期刊发论文奖励多少钱？","college":"计算机与人工智能学院","cohort":"2024","expected_docs":["西南财经大学学生优秀学术论文奖励实施办法（2024年7月修正）"],"answer_must_contain":["1000元/篇"],"category":"论文奖励","should_refuse":false},
+  {"id":"real_q12","question":"专业分流在大一什么时候完成？","college":"计算机与人工智能学院","cohort":"2024","expected_docs":["西南财经大学专业分流管理办法"],"answer_must_contain":["大一第二学期期中"],"category":"专业分流","should_refuse":false},
+  {"id":"real_q13","question":"2024级本科生最长学习年限是多少年？","college":"计算机与人工智能学院","cohort":"2024","expected_docs":["西南财经大学本科学生学籍管理规定（2024年7月修订）"],"answer_must_contain":["最长为六年"],"category":"学籍","should_refuse":false},
+  {"id":"real_q14","question":"累计不合格多少学分会受到学业警示？","college":"计算机与人工智能学院","cohort":"2024","expected_docs":["西南财经大学本科学生学籍管理规定（2024年7月修订）"],"answer_must_contain":["达到 10学分","未达到 16 学分"],"category":"学籍","should_refuse":false},
+  {"id":"real_q15","question":"数学荣誉学士学位需要修读多少门数学荣誉课程？","college":"计算机与人工智能学院","cohort":"2024","expected_docs":["西南财经大学数学荣誉课程和荣誉学士学位工作方案（试行）（2019年3月第3次修订）"],"answer_must_contain":["4门以上II类数学荣誉课程"],"category":"荣誉学位","should_refuse":false},
+  {"id":"real_q16","question":"计算机与人工智能学院2023级推免综合成绩怎么计算？","college":"计算机与人工智能学院","cohort":"2023","expected_docs":["西南财经大学计算机与人工智能学院推荐免试研究生工作实施细则（2023级）"],"answer_must_contain":["学业成绩×70%","综合能力加分","×30%"],"category":"推免","should_refuse":false},
+  {"id":"real_q17","question":"2025级计算机科学与技术专业毕业最低要多少学分？","college":"计算机与人工智能学院","cohort":"2025","expected_docs":["计算机类专业人才培养方案（2025级）"],"answer_must_contain":["计算机科学与技术151学分"],"category":"培养方案","should_refuse":false},
+  {"id":"real_q18","question":"食堂晚上几点关门？","college":"计算机与人工智能学院","cohort":"2024","expected_docs":[],"category":"库外问题","should_refuse":true},
+  {"id":"real_q19","question":"校园网密码忘了怎么办？","college":"计算机与人工智能学院","cohort":"2024","expected_docs":[],"category":"库外问题","should_refuse":true},
+  {"id":"real_q20","question":"博士研究生中期考核什么时候进行？","college":"计算机与人工智能学院","cohort":"2024","expected_docs":[],"category":"隔离范围","should_refuse":true}
+]

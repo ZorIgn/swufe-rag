@@ -15,6 +15,7 @@ import numpy as np
 from contracts import CHUNK_FIELDS, RetrievedChunk
 from retrieval.embed import BGEEncoder, Encoder, normalize_rows
 from retrieval.index import IndexBundle, load_index
+from storage.metadata_db import MetadataDB
 
 
 def tokenize(text: str) -> list[str]:
@@ -96,6 +97,7 @@ class HybridRetriever:
         candidate_k: int = 20,
         rrf_k: int = 60,
         use_bm25: bool = True,
+        metadata_db: MetadataDB | None = None,
     ) -> None:
         if candidate_k < 1 or rrf_k < 1:
             raise ValueError("candidate_k and rrf_k must be positive")
@@ -106,7 +108,19 @@ class HybridRetriever:
         self.candidate_k = candidate_k
         self.rrf_k = rrf_k
         self.use_bm25 = use_bm25
-        self._scope_cache: dict[tuple[str | None, str | None], ScopeView] = {}
+        self.metadata_db = metadata_db or MetadataDB.from_chunks(
+            bundle.chunks, trusted_by_default=True
+        )
+        self._scope_cache: dict[
+            tuple[
+                str | None,
+                str | None,
+                int | None,
+                str | None,
+                tuple[int, ...],
+            ],
+            ScopeView,
+        ] = {}
         self._lock = RLock()
 
     @classmethod
@@ -119,45 +133,69 @@ class HybridRetriever:
         candidate_k: int = 20,
         rrf_k: int = 60,
         use_bm25: bool = True,
+        sources_path: str | Path = "data/sources.csv",
+        metadata_path: str | Path = "data/metadata.sqlite3",
     ) -> "HybridRetriever":
         actual_encoder = encoder or BGEEncoder()
         bundle = load_index(chunks_path, artifacts_dir, actual_encoder)
+        metadata_db = MetadataDB.from_files(
+            sources_path=sources_path,
+            chunks_path=chunks_path,
+            database=metadata_path,
+        )
         return cls(
             bundle,
             actual_encoder,
             candidate_k=candidate_k,
             rrf_k=rrf_k,
             use_bm25=use_bm25,
+            metadata_db=metadata_db,
         )
 
-    def _eligible(self, college: str | None, cohort: str | None) -> np.ndarray:
-        eligible: list[int] = []
-        for index, chunk in enumerate(self.bundle.chunks):
-            if chunk["status"] != "现行":
-                continue
-            if college is not None and not (
-                chunk["level"] == "校级" or chunk["college"] == college
-            ):
-                continue
-            if cohort is not None and chunk["cohort"] not in {"不限", cohort}:
-                continue
-            eligible.append(index)
+    def _eligible(
+        self,
+        college: str | None,
+        cohort: str | None,
+        policy_year: int | None,
+        topic: str | None,
+    ) -> np.ndarray:
+        eligible = self.metadata_db.candidate_rows(
+            college=college,
+            cohort=cohort,
+            policy_year=policy_year,
+            topic=topic,
+        )
+        if any(index >= len(self.bundle.chunks) for index in eligible):
+            raise ValueError("metadata embedding_row is outside the loaded index")
         return np.asarray(eligible, dtype=np.int64)
 
-    def _scope(self, college: str | None, cohort: str | None) -> ScopeView:
-        key = (college, cohort)
+    def _scope(
+        self,
+        college: str | None,
+        cohort: str | None,
+        policy_year: int | None,
+        topic: str | None,
+    ) -> ScopeView:
+        # Execute the SQL allow-list on every request.  The row tuple is part of
+        # the cache key, so disabling or distrusting a source cannot reuse a
+        # stale embedding/BM25 view.
+        indices = self._eligible(college, cohort, policy_year, topic)
+        key = (college, cohort, policy_year, topic, tuple(indices.tolist()))
         with self._lock:
             cached = self._scope_cache.get(key)
             if cached is not None:
                 return cached
-            indices = self._eligible(college, cohort)
             embeddings = (
                 self.bundle.embeddings[indices]
                 if len(indices)
                 else np.empty((0, self.encoder.dimension), dtype=np.float32)
             )
             corpus = [tokenize(self.bundle.chunks[int(index)]["text"]) for index in indices]
-            view = ScopeView(indices, embeddings, make_bm25(corpus))
+            view = ScopeView(
+                indices,
+                embeddings,
+                make_bm25(corpus) if corpus else SimpleBM25([]),
+            )
             self._scope_cache[key] = view
             return view
 
@@ -181,8 +219,32 @@ class HybridRetriever:
         college: str | None = None,
         cohort: str | None = None,
     ) -> list[RetrievedChunk]:
+        """Frozen retrieval contract; scope values are SQL-bound before ranking."""
+
+        return self.retrieve_scoped(
+            query,
+            top_k=top_k,
+            college=college,
+            cohort=cohort,
+        )
+
+    def retrieve_scoped(
+        self,
+        query: str,
+        top_k: int = 5,
+        college: str | None = None,
+        cohort: str | None = None,
+        *,
+        policy_year: int | None = None,
+        topic: str | None = None,
+    ) -> list[RetrievedChunk]:
         clean_query = self._validate_arguments(query, top_k, college, cohort)
-        view = self._scope(college.strip() if college else None, cohort.strip() if cohort else None)
+        view = self._scope(
+            college.strip() if college else None,
+            cohort.strip() if cohort else None,
+            policy_year,
+            topic.strip() if topic else None,
+        )
         if len(view.global_indices) == 0:
             return []
 

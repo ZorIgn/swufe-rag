@@ -62,6 +62,46 @@ class AdvancedGenerationTests(unittest.TestCase):
         chunk = retrieved("fixture_it_table_011", score=0.2)
         self.assertFalse(EvidenceGate().sufficient("CS205是什么课", [chunk]))
 
+    def test_high_dense_score_cannot_bypass_missing_temporal_subject(self) -> None:
+        chunk = retrieved("fixture_school_recommend_005", score=0.8)
+        self.assertFalse(
+            EvidenceGate().sufficient("食堂晚上几点关门？", [chunk])
+        )
+        self.assertFalse(
+            EvidenceGate().sufficient(
+                "博士研究生中期考核什么时候进行？", [chunk]
+            )
+        )
+        self.assertFalse(
+            EvidenceGate().sufficient("校园网密码忘了怎么办？", [chunk])
+        )
+
+    def test_matching_temporal_subject_passes_entity_gate(self) -> None:
+        chunk = retrieved("fixture_school_recommend_005", score=0.8)
+        chunk["text"] += " 缓考申请最迟应在开考前两小时提交。"
+        self.assertTrue(
+            EvidenceGate().sufficient("缓考申请最迟什么时候提交？", [chunk])
+        )
+
+    def test_cohort_specific_advice_requires_same_cohort_evidence(self) -> None:
+        school = retrieved("fixture_school_recommend_005", score=0.8)
+        school["text"] += " 专业选修课至少修满8学分。"
+        self.assertFalse(
+            EvidenceGate().sufficient(
+                "2023级计算机科学与技术专业选修课还差多少学分？",
+                [school],
+            )
+        )
+        school["level"] = "院级"
+        school["college"] = "计算机与人工智能学院"
+        school["cohort"] = "2023"
+        self.assertTrue(
+            EvidenceGate().sufficient(
+                "2023级计算机科学与技术专业选修课还差多少学分？",
+                [school],
+            )
+        )
+
     def test_grouped_citation_is_fixed_without_llm_repair(self) -> None:
         school = retrieved("fixture_school_recommend_005")
         college = retrieved("fixture_it_recommend_013")

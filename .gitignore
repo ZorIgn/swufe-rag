@@ -27,9 +27,19 @@ artifacts/*
 *.npz
 *.tmp
 
+# Module A local source material and generated OCR/reports
+data/raw/*
+!data/raw/.gitkeep
+data/ocr/
+data/ingest_report.json
+data/*.sqlite3
+data/*.sqlite3-shm
+data/*.sqlite3-wal
+
 # Runtime output
 logs/
 eval/output/
+tmp/
 *.log
 
 # Editors and operating systems

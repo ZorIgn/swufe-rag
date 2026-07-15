@@ -1,0 +1,22 @@
+[
+  {"id":"special_q01","question":"2024级计算机科学与技术专业毕业最低需要多少学分？","college":"计算机与人工智能学院","cohort":"2024","expected_docs":["计算机类专业人才培养方案（2024级）"],"answer_must_contain":["153 学分"],"category":"培养方案-毕业学分","should_refuse":false},
+  {"id":"special_q02","question":"2024级人工智能专业毕业最低需要多少学分？","college":"计算机与人工智能学院","cohort":"2024","expected_docs":["计算机类专业人才培养方案（2024级）"],"answer_must_contain":["152 学分"],"category":"培养方案-毕业学分","should_refuse":false},
+  {"id":"special_q03","question":"2025级计算机科学与技术专业毕业最低需要多少学分？","college":"计算机与人工智能学院","cohort":"2025","expected_docs":["计算机类专业人才培养方案（2025级）"],"answer_must_contain":["151学分"],"category":"培养方案-毕业学分","should_refuse":false},
+  {"id":"special_q04","question":"2024级计算机类专业选修课至少要修多少学分？","college":"计算机与人工智能学院","cohort":"2024","expected_docs":["计算机类专业人才培养方案（2024级）"],"answer_must_contain":["不低于 8 学分"],"category":"选课-专业选修","should_refuse":false},
+  {"id":"special_q05","question":"2024级跨专业选修课至少要修多少学分？","college":"计算机与人工智能学院","cohort":"2024","expected_docs":["计算机类专业人才培养方案（2024级）"],"answer_must_contain":["至少 2 学分"],"category":"选课-跨专业","should_refuse":false},
+  {"id":"special_q06","question":"我是2024级计算机科学与技术专业，已经选了Java EE开发实践，还必须选移动应用开发实践吗？","college":"计算机与人工智能学院","cohort":"2024","expected_docs":["计算机类专业人才培养方案（2024级）"],"answer_must_contain":["至少选修其中一门"],"category":"选课-已修课程","should_refuse":false},
+  {"id":"special_q07","question":"2024级人工智能专业必须选人工智能综合实践吗？","college":"计算机与人工智能学院","cohort":"2024","expected_docs":["计算机类专业人才培养方案（2024级）"],"answer_must_contain":["必须选修《人工智能综合实践》"],"category":"选课-专业必选","should_refuse":false},
+  {"id":"special_q08","question":"2024级网络空间安全专业在Java EE、移动应用、人工智能综合实践三门里怎么选？","college":"计算机与人工智能学院","cohort":"2024","expected_docs":["计算机类专业人才培养方案（2024级）"],"answer_must_contain":["至少选修其中一门"],"category":"选课-专业必选","should_refuse":false},
+  {"id":"special_q09","question":"2024级大四不想上普通课程，培养方案第七和第八学期主要安排什么？","college":"计算机与人工智能学院","cohort":"2024","expected_docs":["计算机类专业人才培养方案（2024级）"],"answer_must_contain":["毕业实习","毕业设计（论文）"],"category":"选课-大四安排","should_refuse":false},
+  {"id":"special_q10","question":"2024级CST410算法交易是几学分，第几学期开？","college":"计算机与人工智能学院","cohort":"2024","expected_docs":["计算机类专业人才培养方案（2024级）"],"answer_must_contain":["2.0","7"],"category":"选课-课程代码","should_refuse":false},
+  {"id":"special_q11","question":"计算机与人工智能学院2023级推免综合测评成绩怎么计算？","college":"计算机与人工智能学院","cohort":"2023","expected_docs":["西南财经大学计算机与人工智能学院推荐免试研究生工作实施细则（2023级）"],"answer_must_contain":["学业成绩×70%","综合能力加分","×30%"],"category":"推免-综合成绩","should_refuse":false},
+  {"id":"special_q12","question":"2023级推免的一般竞赛团体项目第二成员按项目总分多少比例加分？","college":"计算机与人工智能学院","cohort":"2023","expected_docs":["西南财经大学计算机与人工智能学院推荐免试研究生工作实施细则（2023级）"],"answer_must_contain":["80%"],"category":"推免-团队系数","should_refuse":false},
+  {"id":"special_q13","question":"2023级推免学科竞赛国家级一等奖基础加分是多少？","college":"计算机与人工智能学院","cohort":"2023","expected_docs":["西南财经大学计算机与人工智能学院推荐免试研究生工作实施细则（2023级）"],"answer_must_contain":["40分"],"category":"推免-竞赛等级","should_refuse":false},
+  {"id":"special_q14","question":"2023级全国大学生数学竞赛省级一等奖如何折算推免加分？","college":"计算机与人工智能学院","cohort":"2023","expected_docs":["西南财经大学计算机与人工智能学院推荐免试研究生工作实施细则（2023级）"],"answer_must_contain":["12分","1/2"],"category":"推免-跨条款计算","should_refuse":false},
+  {"id":"special_q15","question":"2023级Kaggle竞赛参赛队伍至少多少支才纳入推免加分，训练赛算吗？","college":"计算机与人工智能学院","cohort":"2023","expected_docs":["西南财经大学计算机与人工智能学院推荐免试研究生工作实施细则（2023级）"],"answer_must_contain":["至少1000支","训练赛和教学赛不算"],"category":"推免-Kaggle门槛","should_refuse":false},
+  {"id":"special_q16","question":"2023级Kaggle正式比赛第1到3名按什么竞赛等级认定？","college":"计算机与人工智能学院","cohort":"2023","expected_docs":["西南财经大学计算机与人工智能学院推荐免试研究生工作实施细则（2023级）"],"answer_must_contain":["国家级一等奖"],"category":"推免-Kaggle名次","should_refuse":false},
+  {"id":"special_q17","question":"2023级挑战杯获奖项目的团队成员按项目总分多少比例加分？","college":"计算机与人工智能学院","cohort":"2023","expected_docs":["西南财经大学计算机与人工智能学院推荐免试研究生工作实施细则（2023级）"],"answer_must_contain":["100%"],"category":"推免-挑战杯","should_refuse":false},
+  {"id":"special_q18","question":"2023级以第一作者发表A类学术期刊论文，推免科研成果加多少分？","college":"计算机与人工智能学院","cohort":"2023","expected_docs":["西南财经大学计算机与人工智能学院推荐免试研究生工作实施细则（2023级）"],"answer_must_contain":["30分"],"category":"推免-论文","should_refuse":false},
+  {"id":"special_q19","question":"2024级Kaggle竞赛第5名能加多少推免分？","college":"计算机与人工智能学院","cohort":"2024","expected_docs":[],"category":"推免-缺少年级细则","should_refuse":true},
+  {"id":"special_q20","question":"2023级计算机科学与技术专业选修课还差多少学分？","college":"计算机与人工智能学院","cohort":"2023","expected_docs":[],"category":"培养方案-缺少年级方案","should_refuse":true}
+]

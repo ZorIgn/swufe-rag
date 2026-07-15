@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>西财教务助手</title>
+  <link rel="stylesheet" href="/assets/chat.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span>SWUFE</span><strong>西财教务助手</strong></div>
+    <div class="trust-note"><i></i>学校事实仅使用官方材料</div>
+  </header>
+
+  <main class="layout">
+    <aside class="scope-panel">
+      <p class="eyebrow">可信范围</p>
+      <h1>自然聊天，<br>学校事实可追溯。</h1>
+      <p class="intro">普通问题直接交流；培养方案、选课、推免与校内事实自动进入可信检索。</p>
+      <label for="college">学院（可选）</label>
+      <select id="college"><option value="">自动识别</option></select>
+      <label for="cohort">入学年级（可选）</label>
+      <select id="cohort"><option value="">自动识别</option></select>
+      <div class="boundary">
+        <strong>回答边界</strong>
+        <p>学校网址由来源数据库绑定；知识库没有证据时会明确说明，不会交给通用模型猜测。</p>
+      </div>
+    </aside>
+
+    <section class="chat-panel" aria-label="对话区">
+      <div id="messages" class="messages" aria-live="polite">
+        <article class="message assistant welcome">
+          <div class="message-meta"><span>教务助手</span><b>准备就绪</b></div>
+          <p>你可以直接问：2024级计算机类专业选修怎么选？也可以问普通学习或编程问题。</p>
+        </article>
+      </div>
+      <form id="chatForm" class="composer">
+        <textarea id="question" rows="3" maxlength="1000" placeholder="输入问题，Enter 发送，Shift+Enter 换行" required></textarea>
+        <div class="composer-foot"><span id="status">已连接</span><button type="submit">发送</button></div>
+      </form>
+    </section>
+
+    <aside class="source-panel" aria-label="原文与链接">
+      <div class="source-head"><p class="eyebrow">官方来源</p><span id="sourceCount">0</span></div>
+      <div id="sources" class="source-empty">回答中的引用与官方查询入口会显示在这里。</div>
+      <article id="sourceDetail" class="source-detail" hidden></article>
+    </aside>
+  </main>
+  <div id="toast" class="toast" role="status"></div>
+  <script src="/assets/chat.js" defer></script>
+</body>
+</html>

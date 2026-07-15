@@ -19,6 +19,7 @@ retrieval:
 generation:
   llm: deepseek-chat
   temperature: 0
+  general_temperature: 0.7
   refuse_th: 0.35
   max_retries: 2
   request_timeout_seconds: 60

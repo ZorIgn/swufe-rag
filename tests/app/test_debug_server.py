@@ -49,6 +49,63 @@ class DebugServerTests(unittest.TestCase):
         self.assertIn("证据调试台", response.text)
 
 
+@unittest.skipUnless(HAS_WEB_DEPS, "install requirements-web.txt to run HTTP tests")
+class RealReviewServerTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        from fastapi.testclient import TestClient
+        from app.debug_server import create_app
+        from app.runtime import build_review_runtime
+
+        root = Path(__file__).parents[2]
+        cls.client = TestClient(
+            create_app(build_review_runtime(root / "data" / "chunks.jsonl"))
+        )
+
+    def test_review_runtime_exposes_real_chunks_and_source_links(self) -> None:
+        health = self.client.get("/api/debug/health")
+        self.assertEqual(health.status_code, 200)
+        self.assertEqual(health.json()["mode"], "review")
+        self.assertEqual(health.json()["chunk_count"], 814)
+
+        response = self.client.post(
+            "/api/debug/ask",
+            json={
+                "question": "缓考申请最迟什么时候提交？",
+                "college": "计算机与人工智能学院",
+                "cohort": "2024",
+                "top_k": 5,
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertFalse(payload["refused"])
+        self.assertEqual(payload["mode"], "review")
+        self.assertTrue(payload["citations"])
+
+        citation = payload["citations"][0]
+        source = self.client.get(f"/api/debug/source/{citation['chunk_id']}")
+        self.assertEqual(source.status_code, 200)
+        source_payload = source.json()
+        self.assertIn(citation["quote"], source_payload["text"])
+        self.assertEqual(citation["page_url"], source_payload["page_url"])
+        self.assertEqual(citation["file_url"], source_payload["file_url"])
+        self.assertTrue(source_payload["file_url"].startswith("https://"))
+
+    def test_review_runtime_rejects_out_of_corpus_help_request(self) -> None:
+        response = self.client.post(
+            "/api/debug/ask",
+            json={
+                "question": "校园网密码忘了怎么办？",
+                "college": "计算机与人工智能学院",
+                "cohort": "2024",
+                "top_k": 5,
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["refused"])
+
+
 class StaticAssetTests(unittest.TestCase):
     def test_assets_exist_without_web_dependencies(self) -> None:
         static = Path(__file__).parents[2] / "app" / "static"
@@ -62,6 +119,9 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn("[hidden] { display: none !important; }", css)
         self.assertIn("function resetSourcePanel()", javascript)
         self.assertIn("resetSourcePanel();", javascript)
+        self.assertIn("source.page_url", javascript)
+        self.assertIn("source.file_url", javascript)
+        self.assertIn("附件原文", javascript)
 
 
 if __name__ == "__main__":

@@ -2,9 +2,11 @@
 
 ## 当前完成度
 
+- A 数据模块：完成 21 份来源登记、DOCX/PDF 解析、OCR 旁车、条款/列表切分、表格保留和 814 块真实 `chunks.jsonl`。
 - B 检索模块：契约校验、BGE 适配、FAISS 持久化、学院/年级硬过滤、BM25 和 RRF。
 - C 生成模块：DeepSeek/Ollama 适配、受约束提示词、引用映射、数字检查、修复和拒答。
-- 当前只有模拟知识块测试结果，不能代替真实教务文件评估。
+- D 接口：完成 `general_chat/school_rag` 双路由、连续会话、正式 `/ask`、`/source/{chunk_id}`、测试 Web 与隔离调试 Web。
+- 已有 20 条专项真实检索题、100 条路由题和正式 BGE/FAISS 结果；真实 LLM 独立评估仍需 API 配置。
 
 ## 环境安装
 
@@ -24,9 +26,17 @@ python -m unittest discover -s . -p "test*.py" -v
 
 离线测试使用 `HashingEncoder`、临时 NumPy 索引和 `FakeClient`。生产入口不会自动加载这些测试替身。
 
-## 正式知识库到位后
+## 真实知识库与正式索引
 
-模块 A 将数据写入 `data/chunks.jsonl`。先运行索引构建：
+重新生成模块 A 产物：
+
+```powershell
+pip install -r requirements-ingest.txt
+python -m ingest --sources data/sources.csv --raw-dir data/raw `
+  --ocr-dir data/ocr --output data/chunks.jsonl --report data/ingest_report.json
+```
+
+构建正式索引：
 
 ```powershell
 python -m retrieval.index --chunks data/chunks.jsonl --artifacts artifacts
@@ -83,14 +93,18 @@ result = answer("我重修通过后还能申请推免吗", chunks)
 
 低于 `refuse_th` 时不会调用 LLM。LLM 服务错误抛出 `GenerationUnavailableError`，不能伪装成知识不足。
 
-## D 模块串联方式
+## 混合编排方式
 
 ```python
-chunks = retrieve(question, top_k, college, cohort)
-result = answer(question, chunks)
+decision = route_question(question, context=session_context)
+if decision.mode == "general_chat":
+    result = general_chat.answer(question)
+else:
+    chunks = retrieve_scoped(decision.rewritten_query, ...)
+    result = answer(decision.rewritten_query, chunks)
 ```
 
-D 负责添加 `retrieved` 摘要、`latency_ms` 和 HTTP 状态，不能改变 B、C 冻结返回结构。`GET /source/{chunk_id}` 直接读取经过契约校验的知识块存储。
+D 仍不改变 B/C 冻结返回结构。学校分支先由 SQLite 过滤可信、启用、现行、学院、年级、年份和主题，再做向量/BM25 排序；生成后的引用和 URL 按 `chunk_id` 回查 SQLite。通用分支不执行检索。
 
 正式 HTTP 适配层已实现。只有真实知识库和索引到位后才启动：
 
@@ -98,9 +112,12 @@ D 负责添加 `retrieved` 摘要、`latency_ms` 和 HTTP 状态，不能改变 
 python -m app.server
 ```
 
+启动后浏览器直接访问 <http://127.0.0.1:8000>。首次运行会根据 `sources.csv` 和 `chunks.jsonl` 生成 Git 忽略的 `data/metadata.sqlite3`；输入文件哈希变化时自动重建。
+
 接口：
 
-- `POST /ask`：请求只接收 `question`、`college`、`cohort`；
+- `POST /ask`：请求接收 `question`、可选 `college`、`cohort`、`session_id`；
+- `GET /options`：返回可选范围和知识库数量；
 - `GET /source/{chunk_id}`：返回完整知识块，不带检索分数；
 - 数据、索引未就绪或 LLM 不可用时返回 `503`；
 - 非法业务参数返回 `400`，未知 `chunk_id` 返回 `404`；
@@ -142,6 +159,16 @@ python -m app.debug_server
 - `POST /api/debug/ask`
 - `GET /api/debug/source/{chunk_id}`
 
+默认 `SWUFE_RAG_MODE=demo` 使用 fixture。若要在不下载模型、不调用 API 的情况下审阅真实知识块：
+
+```powershell
+$env:SWUFE_RAG_MODE="review"
+$env:SWUFE_RAG_CHUNKS="data/chunks.jsonl"
+python -m app.debug_server
+```
+
+该模式的 `0.34` 拒答阈值只针对哈希向量的本地 UX 回归；正式 B/C 仍保持硬性 `0.35`，必须用真实 BGE 开发集重新校准。
+
 调试层可返回 `retrieved`、`latency_ms` 和 `mode`，但这些字段不进入 `swufe_rag.api.answer()` 的冻结返回对象。正式 D 模块可以迁移 HTTP 路径，但应继续复用统一 Python 门面。
 
 ## 高级 B/C 配置
@@ -162,6 +189,22 @@ python -m eval.demo_eval
 ```
 
 `demo/queries.json` 含 20 题，覆盖培养方案、课程代码、表格数字、校级与院级政策、口语表达、库外问题和跨学院污染陷阱。当前基线为 Recall@5 100%、范围污染 0、拒答准确率 100%。
+
+双路由评估：
+
+```powershell
+python -m eval.hybrid_route_eval
+```
+
+验收门槛：普通问题误拦截率不高于 2%、学校事实流入通用模型为 0、连续追问准确率不低于 95%。当前三项分别为 0%、0、100%。
+
+真实数据离线审阅：
+
+```powershell
+python -m eval.real_data_eval
+```
+
+该 20 题开发集检查 Top-5 文档命中、范围污染、拒答和关键答案词。结果用于回归，不替代最终 30～40 题人工评分。
 
 ## 参考实现研究
 

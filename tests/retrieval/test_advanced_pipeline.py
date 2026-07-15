@@ -56,6 +56,32 @@ class AdvancedRetrieverTests(unittest.TestCase):
         self.assertIn("推免", analysis.expanded)
         self.assertIn("推荐免试", analysis.expanded)
 
+    def test_temporal_policy_subject_is_a_required_entity(self) -> None:
+        self.assertIn(
+            "缓考申请",
+            analyze_query("缓考申请最迟什么时候提交？").required_entities,
+        )
+        self.assertIn(
+            "专业分流",
+            analyze_query("专业分流在大一什么时候完成？").required_entities,
+        )
+        self.assertIn(
+            "博士研究生中期考核",
+            analyze_query("博士研究生中期考核什么时候进行？").required_entities,
+        )
+        self.assertIn(
+            "校园网密码",
+            analyze_query("校园网密码忘了怎么办？").required_entities,
+        )
+        self.assertIn(
+            "准考证",
+            analyze_query("我的准考证丢了怎么办？").required_entities,
+        )
+        self.assertIn(
+            "Kaggle",
+            analyze_query("Kaggle竞赛第5名能加多少分？").required_entities,
+        )
+
     def test_colloquial_query_finds_policy_clause(self) -> None:
         results = self.pipeline.retrieve(
             "挂科还能保研吗",

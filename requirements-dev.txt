@@ -1,3 +1,4 @@
 -r requirements.txt
+-r requirements-ingest.txt
 pytest>=8.0,<10
 

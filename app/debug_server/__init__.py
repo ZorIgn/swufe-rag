@@ -9,7 +9,7 @@ from threading import RLock
 
 from pydantic import BaseModel, Field
 
-from app.runtime import RAGRuntime, build_demo_runtime
+from app.runtime import RAGRuntime, build_demo_runtime, build_review_runtime
 from contracts import GenerationUnavailableError, KnowledgeBaseNotReadyError
 
 
@@ -37,11 +37,15 @@ def get_runtime() -> RAGRuntime:
     with _runtime_lock:
         if _runtime is None:
             mode = os.getenv("SWUFE_RAG_MODE", "demo").lower()
-            if mode != "demo":
+            if mode == "demo":
+                _runtime = build_demo_runtime()
+            elif mode == "review":
+                chunks_path = os.getenv("SWUFE_RAG_CHUNKS", "data/chunks.jsonl")
+                _runtime = build_review_runtime(chunks_path)
+            else:
                 raise KnowledgeBaseNotReadyError(
-                    "production runtime wiring waits for real chunks and index; use SWUFE_RAG_MODE=demo"
+                    "debug server mode must be demo or review; use app.server for production"
                 )
-            _runtime = build_demo_runtime()
         return _runtime
 
 

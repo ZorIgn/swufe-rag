@@ -53,5 +53,31 @@ def retrieve(
     return _get_retriever().retrieve(query, top_k, college, cohort)
 
 
+def retrieve_scoped(
+    query: str,
+    top_k: int = 5,
+    college: str | None = None,
+    cohort: str | None = None,
+    *,
+    policy_year: int | None = None,
+    topic: str | None = None,
+) -> list[RetrievedChunk]:
+    """Additive school-orchestration entry point with SQL-bound scope.
+
+    The frozen ``retrieve`` signature remains unchanged.  This entry point is
+    used only by the mixed-dialogue layer when the validated router supplies a
+    policy year or topic allow-list value.
+    """
+
+    return _get_retriever().retrieve_scoped(
+        query,
+        top_k=top_k,
+        college=college,
+        cohort=cohort,
+        policy_year=policy_year,
+        topic=topic,
+    )
+
+
 def answer(query: str, chunks: list[dict[str, Any]]) -> AnswerResult:
     return _get_generation().answer(query, chunks)
