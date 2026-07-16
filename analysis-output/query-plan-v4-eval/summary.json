@@ -1,0 +1,122 @@
+{
+  "n": 100,
+  "answered": 98,
+  "refused": 1,
+  "clarified": 1,
+  "with_page_citation": 98,
+  "tool_match": 98,
+  "paths": {
+    "rag+deterministic": 57,
+    "sql+deterministic": 35,
+    "error": 1,
+    "sql->table_rag": 6,
+    "clarify": 1
+  },
+  "by_group": {
+    "school_unified": {
+      "n": 15,
+      "answered": 15,
+      "refused": 0,
+      "clarified": 0,
+      "with_page_citation": 15,
+      "tool_match": 15,
+      "paths": {
+        "rag+deterministic": 15
+      }
+    },
+    "public_courses": {
+      "n": 15,
+      "answered": 15,
+      "refused": 0,
+      "clarified": 0,
+      "with_page_citation": 15,
+      "tool_match": 15,
+      "paths": {
+        "rag+deterministic": 15
+      }
+    },
+    "cs_overall": {
+      "n": 15,
+      "answered": 15,
+      "refused": 0,
+      "clarified": 0,
+      "with_page_citation": 15,
+      "tool_match": 15,
+      "paths": {
+        "rag+deterministic": 15
+      }
+    },
+    "cs_year1": {
+      "n": 15,
+      "answered": 13,
+      "refused": 1,
+      "clarified": 1,
+      "with_page_citation": 13,
+      "tool_match": 13,
+      "paths": {
+        "sql+deterministic": 9,
+        "error": 1,
+        "sql->table_rag": 4,
+        "clarify": 1
+      }
+    },
+    "cs_courses": {
+      "n": 15,
+      "answered": 15,
+      "refused": 0,
+      "clarified": 0,
+      "with_page_citation": 15,
+      "tool_match": 15,
+      "paths": {
+        "sql+deterministic": 13,
+        "sql->table_rag": 2
+      }
+    },
+    "cs_practice": {
+      "n": 10,
+      "answered": 10,
+      "refused": 0,
+      "clarified": 0,
+      "with_page_citation": 10,
+      "tool_match": 10,
+      "paths": {
+        "sql+deterministic": 9,
+        "rag+deterministic": 1
+      }
+    },
+    "ai_overall": {
+      "n": 10,
+      "answered": 10,
+      "refused": 0,
+      "clarified": 0,
+      "with_page_citation": 10,
+      "tool_match": 10,
+      "paths": {
+        "rag+deterministic": 9,
+        "sql+deterministic": 1
+      }
+    },
+    "ai_cross": {
+      "n": 5,
+      "answered": 5,
+      "refused": 0,
+      "clarified": 0,
+      "with_page_citation": 5,
+      "tool_match": 5,
+      "paths": {
+        "sql+deterministic": 3,
+        "rag+deterministic": 2
+      }
+    }
+  },
+  "refused_ids": [
+    50
+  ],
+  "clarified_ids": [
+    60
+  ],
+  "tool_mismatch_ids": [
+    50,
+    60
+  ]
+}

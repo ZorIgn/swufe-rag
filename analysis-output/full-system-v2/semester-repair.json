@@ -1,0 +1,913 @@
+{
+  "initial_unmarked": 2711,
+  "repaired": 1069,
+  "methods": {
+    "cohort_code": 649,
+    "global_code": 138,
+    "cohort_name": 14,
+    "neighbor_agreement": 268
+  },
+  "remaining_unmarked": 1642,
+  "remaining_examples": [
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "ENG100",
+      "name": "综合英语课程",
+      "page": 690,
+      "source_row": 2
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "IMS100",
+      "name": "大学计算机基础",
+      "page": 690,
+      "source_row": 3
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "IPT102",
+      "name": "中国近现代史纲要",
+      "page": 690,
+      "source_row": 4
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "JOB100",
+      "name": "大学生职业生涯规 划与创业基础",
+      "page": 690,
+      "source_row": 5
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "MAT301",
+      "name": "高等数学I",
+      "page": 690,
+      "source_row": 6
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "LAW101",
+      "name": "法理学Ⅰ(含社会主 义法治理念)",
+      "page": 690,
+      "source_row": 8
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "LAW102",
+      "name": "宪法学",
+      "page": 690,
+      "source_row": 9
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "ECO100",
+      "name": "政治经济学",
+      "page": 690,
+      "source_row": 10
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "HUM101",
+      "name": "逻辑与批判性思维",
+      "page": 690,
+      "source_row": 11
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "HUM102",
+      "name": "沟通与写作",
+      "page": 690,
+      "source_row": 12
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "HUM103",
+      "name": "中国传统文化概论",
+      "page": 690,
+      "source_row": 13
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "HUM104",
+      "name": "大学生心理健康与 人生发展",
+      "page": 690,
+      "source_row": 14
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "HUM105",
+      "name": "科学技术史",
+      "page": 690,
+      "source_row": 15
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "HUM106",
+      "name": "社会学思想与方法",
+      "page": 690,
+      "source_row": 16
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "HUM107",
+      "name": "中外文学经典选讲",
+      "page": 690,
+      "source_row": 17
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "HUM108",
+      "name": "艺术修养与审美体 验",
+      "page": 691,
+      "source_row": 1
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "IPT101",
+      "name": "思想道德修养与法 律基础",
+      "page": 691,
+      "source_row": 2
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "MAT302",
+      "name": "高等数学II",
+      "page": 691,
+      "source_row": 3
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "LAW103",
+      "name": "民法总论",
+      "page": 691,
+      "source_row": 5
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "LAW105",
+      "name": "刑法总论",
+      "page": 691,
+      "source_row": 6
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "ACC200",
+      "name": "会计学",
+      "page": 691,
+      "source_row": 7
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "ECO101",
+      "name": "微观经济学",
+      "page": 691,
+      "source_row": 8
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "ENG200",
+      "name": "英语专项技能课程",
+      "page": 692,
+      "source_row": 2
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "IPT103",
+      "name": "马克思主义基本原 理",
+      "page": 692,
+      "source_row": 2
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "ENG300",
+      "name": "英语拓展课程",
+      "page": 692,
+      "source_row": 3
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "PED300",
+      "name": "体育Ⅲ",
+      "page": 692,
+      "source_row": 3
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "LAW106",
+      "name": "刑法分论",
+      "page": 692,
+      "source_row": 5
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "ECO102",
+      "name": "宏观经济学",
+      "page": 692,
+      "source_row": 6
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "ACC300",
+      "name": "中级财务会计",
+      "page": 692,
+      "source_row": 8
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "IPT104",
+      "name": "毛泽东思想和中国 特色社会主义理论 体系概论 The",
+      "page": 693,
+      "source_row": 2
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "IPT105",
+      "name": "当代世界经济与政 治Contemporary",
+      "page": 693,
+      "source_row": 3
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "MAT321",
+      "name": "概率论",
+      "page": 693,
+      "source_row": 4
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "PED400",
+      "name": "体育Ⅳ",
+      "page": 693,
+      "source_row": 5
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "FIN200",
+      "name": "货币金融学",
+      "page": 694,
+      "source_row": 2
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "ADT200",
+      "name": "审计学",
+      "page": 694,
+      "source_row": 7
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "ADT201",
+      "name": "会计信息系统",
+      "page": 694,
+      "source_row": 8
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "FMT200",
+      "name": "财务管理",
+      "page": 694,
+      "source_row": 9
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "LAW305",
+      "name": "侵权责任法",
+      "page": 694,
+      "source_row": 10
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "BST200",
+      "name": "统计学",
+      "page": 695,
+      "source_row": 2
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "LAW107",
+      "name": "经济法",
+      "page": 695,
+      "source_row": 3
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "LAW403",
+      "name": "法律文书",
+      "page": 695,
+      "source_row": 14
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "PRT107",
+      "name": "综合实验",
+      "page": 695,
+      "source_row": 15
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "LAW310",
+      "name": "国际经济法",
+      "page": 696,
+      "source_row": 6
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "LAW314",
+      "name": "外国法制史 The",
+      "page": 696,
+      "source_row": 7
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "LAW318",
+      "name": "金融法",
+      "page": 696,
+      "source_row": 8
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "LAW319",
+      "name": "保险法",
+      "page": 696,
+      "source_row": 9
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "LAW322",
+      "name": "证据法",
+      "page": 696,
+      "source_row": 10
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "LAW323",
+      "name": "法律经济学",
+      "page": 696,
+      "source_row": 11
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "LAW313",
+      "name": "法理学II",
+      "page": 697,
+      "source_row": 2
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-会计”双学位班",
+      "module": "（七）自由选修课",
+      "code": "PRT110",
+      "name": "毕业实习",
+      "page": 698,
+      "source_row": 2
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "ENG100",
+      "name": "综合英语课程",
+      "page": 710,
+      "source_row": 2
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "IMS100",
+      "name": "大学计算机基础",
+      "page": 710,
+      "source_row": 3
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "IPT102",
+      "name": "中国近现代史纲要",
+      "page": 710,
+      "source_row": 4
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "JOB100",
+      "name": "大学生职业生涯规 划与创业基础",
+      "page": 710,
+      "source_row": 5
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "MAT301",
+      "name": "高等数学I",
+      "page": 710,
+      "source_row": 6
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "ECO100",
+      "name": "政治经济学",
+      "page": 710,
+      "source_row": 8
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "HUM101",
+      "name": "逻辑与批判性思维",
+      "page": 710,
+      "source_row": 9
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "HUM102",
+      "name": "沟通与写作",
+      "page": 710,
+      "source_row": 10
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "HUM103",
+      "name": "中国传统文化概论",
+      "page": 710,
+      "source_row": 11
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "HUM104",
+      "name": "大学生心理健康与 人生发展",
+      "page": 710,
+      "source_row": 12
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "HUM105",
+      "name": "科学技术史",
+      "page": 710,
+      "source_row": 13
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "HUM106",
+      "name": "社会学思想与方法",
+      "page": 710,
+      "source_row": 14
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "HUM107",
+      "name": "中外文学经典选讲",
+      "page": 710,
+      "source_row": 15
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "HUM108",
+      "name": "艺术修养与审美体 验",
+      "page": 710,
+      "source_row": 16
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "IPT101",
+      "name": "思想道德修养与法 律基础",
+      "page": 711,
+      "source_row": 2
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "MAT302",
+      "name": "高等数学II",
+      "page": 711,
+      "source_row": 3
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "IPT103",
+      "name": "马克思主义基本原理",
+      "page": 712,
+      "source_row": 2
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "IPT105",
+      "name": "当代世界经济与政治",
+      "page": 712,
+      "source_row": 3
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "MAT313",
+      "name": "高等代数Ⅰ",
+      "page": 712,
+      "source_row": 4
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "PED300",
+      "name": "体育Ⅲ",
+      "page": 712,
+      "source_row": 5
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "ACC200",
+      "name": "会计学",
+      "page": 712,
+      "source_row": 6
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "ECO102",
+      "name": "宏观经济学",
+      "page": 712,
+      "source_row": 7
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "LAW101",
+      "name": "法理学Ⅰ(含社会主 义法治理念)",
+      "page": 712,
+      "source_row": 8
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "LAW102",
+      "name": "宪法学",
+      "page": 712,
+      "source_row": 9
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "LAW103",
+      "name": "民法总论",
+      "page": 712,
+      "source_row": 10
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "LAW105",
+      "name": "刑法总论",
+      "page": 712,
+      "source_row": 11
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "IPT104",
+      "name": "毛泽东思想和中国特 色社会主义理论体系 概论 The",
+      "page": 713,
+      "source_row": 2
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "PED400",
+      "name": "体育Ⅳ",
+      "page": 713,
+      "source_row": 3
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "FIN200",
+      "name": "货币金融学 The",
+      "page": 713,
+      "source_row": 4
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "LAW104",
+      "name": "民法分论",
+      "page": 713,
+      "source_row": 5
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "LAW106",
+      "name": "刑法分论",
+      "page": 713,
+      "source_row": 6
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "INS201",
+      "name": "保险学",
+      "page": 713,
+      "source_row": 9
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "LAW305",
+      "name": "侵权责任法",
+      "page": 714,
+      "source_row": 1
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "BST200",
+      "name": "统计学",
+      "page": 714,
+      "source_row": 2
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "LAW107",
+      "name": "经济法",
+      "page": 714,
+      "source_row": 3
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "FIN303",
+      "name": "公司金融",
+      "page": 714,
+      "source_row": 4
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "FIN304",
+      "name": "投资学",
+      "page": 714,
+      "source_row": 5
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "FIN305",
+      "name": "国际金融学",
+      "page": 714,
+      "source_row": 6
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "LAW204",
+      "name": "知识产权法",
+      "page": 714,
+      "source_row": 7
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "LAW403",
+      "name": "法律文书",
+      "page": 715,
+      "source_row": 1
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "FIN302",
+      "name": "商业银行经营管理",
+      "page": 715,
+      "source_row": 2
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "FIN306",
+      "name": "中央银行与金融监管",
+      "page": 715,
+      "source_row": 3
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "LAW203",
+      "name": "商法",
+      "page": 715,
+      "source_row": 7
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "LAW310",
+      "name": "国际经济法",
+      "page": 716,
+      "source_row": 4
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "LAW314",
+      "name": "外国法制史 The",
+      "page": 716,
+      "source_row": 5
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "LAW318",
+      "name": "金融法",
+      "page": 716,
+      "source_row": 6
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "LAW319",
+      "name": "保险法",
+      "page": 716,
+      "source_row": 7
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "LAW322",
+      "name": "证据法",
+      "page": 716,
+      "source_row": 8
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "LAW323",
+      "name": "法律经济学",
+      "page": 716,
+      "source_row": 9
+    },
+    {
+      "cohort": "2017",
+      "major": "“法学-金融”实验班",
+      "module": "（七）自由选修课",
+      "code": "PRT107",
+      "name": "综合实验",
+      "page": 716,
+      "source_row": 11
+    }
+  ]
+}

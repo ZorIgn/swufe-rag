@@ -1,0 +1,176 @@
+{
+  "n": 100,
+  "answered": 85,
+  "refused": 2,
+  "clarified": 13,
+  "with_page_citation": 84,
+  "tool_match": 65,
+  "paths": {
+    "rag+deterministic": 69,
+    "sql->table_rag": 1,
+    "clarify": 13,
+    "sql+deterministic": 14,
+    "general_llm": 1,
+    "error": 2
+  },
+  "by_group": {
+    "school_unified": {
+      "n": 15,
+      "answered": 13,
+      "refused": 0,
+      "clarified": 2,
+      "with_page_citation": 13,
+      "tool_match": 12,
+      "paths": {
+        "rag+deterministic": 12,
+        "sql->table_rag": 1,
+        "clarify": 2
+      }
+    },
+    "public_courses": {
+      "n": 15,
+      "answered": 13,
+      "refused": 0,
+      "clarified": 2,
+      "with_page_citation": 13,
+      "tool_match": 13,
+      "paths": {
+        "rag+deterministic": 13,
+        "clarify": 2
+      }
+    },
+    "cs_overall": {
+      "n": 15,
+      "answered": 14,
+      "refused": 0,
+      "clarified": 1,
+      "with_page_citation": 14,
+      "tool_match": 14,
+      "paths": {
+        "rag+deterministic": 14,
+        "clarify": 1
+      }
+    },
+    "cs_year1": {
+      "n": 15,
+      "answered": 14,
+      "refused": 0,
+      "clarified": 1,
+      "with_page_citation": 13,
+      "tool_match": 9,
+      "paths": {
+        "sql+deterministic": 9,
+        "rag+deterministic": 4,
+        "general_llm": 1,
+        "clarify": 1
+      }
+    },
+    "cs_courses": {
+      "n": 15,
+      "answered": 10,
+      "refused": 0,
+      "clarified": 5,
+      "with_page_citation": 10,
+      "tool_match": 1,
+      "paths": {
+        "clarify": 5,
+        "rag+deterministic": 9,
+        "sql+deterministic": 1
+      }
+    },
+    "cs_practice": {
+      "n": 10,
+      "answered": 8,
+      "refused": 2,
+      "clarified": 0,
+      "with_page_citation": 8,
+      "tool_match": 3,
+      "paths": {
+        "error": 2,
+        "rag+deterministic": 6,
+        "sql+deterministic": 2
+      }
+    },
+    "ai_overall": {
+      "n": 10,
+      "answered": 10,
+      "refused": 0,
+      "clarified": 0,
+      "with_page_citation": 10,
+      "tool_match": 10,
+      "paths": {
+        "rag+deterministic": 9,
+        "sql+deterministic": 1
+      }
+    },
+    "ai_cross": {
+      "n": 5,
+      "answered": 3,
+      "refused": 0,
+      "clarified": 2,
+      "with_page_citation": 3,
+      "tool_match": 3,
+      "paths": {
+        "clarify": 2,
+        "sql+deterministic": 1,
+        "rag+deterministic": 2
+      }
+    }
+  },
+  "refused_ids": [
+    76,
+    85
+  ],
+  "clarified_ids": [
+    10,
+    11,
+    19,
+    20,
+    45,
+    60,
+    61,
+    64,
+    67,
+    68,
+    73,
+    96,
+    98
+  ],
+  "tool_mismatch_ids": [
+    6,
+    10,
+    11,
+    19,
+    20,
+    45,
+    48,
+    49,
+    50,
+    58,
+    59,
+    60,
+    61,
+    62,
+    63,
+    64,
+    66,
+    67,
+    68,
+    69,
+    70,
+    71,
+    72,
+    73,
+    74,
+    75,
+    76,
+    77,
+    78,
+    79,
+    81,
+    82,
+    85,
+    96,
+    98
+  ]
+}

@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>西财教务助手 · QueryPlan</title>
+  <style>
+    :root{font-family:"Microsoft YaHei",sans-serif;color:#17372f;background:#f5f5ed;--g:#075f48;--l:#d5e2d8;--p:#fffefa;--m:#63726c}
+    *{box-sizing:border-box}body{margin:0}.top{height:62px;display:flex;align-items:center;justify-content:space-between;padding:0 24px;border-bottom:1px solid var(--l);background:var(--p)}
+    .brand{font-weight:800}.brand b{margin-right:12px;padding:6px 8px;color:white;background:var(--g);font-size:11px;letter-spacing:.12em}.state{font-size:12px;color:var(--m)}
+    main{min-height:calc(100vh - 62px);display:grid;grid-template-columns:280px minmax(420px,1fr) 330px}.side{padding:26px 22px;background:var(--p)}.left{border-right:1px solid var(--l)}.right{border-left:1px solid var(--l)}
+    h1{margin:0 0 9px;font:500 27px/1.25 SimSun,serif}.intro,.hint,.empty{font-size:12px;line-height:1.65;color:var(--m)}label{display:block;margin:18px 0 6px;font-size:12px;font-weight:700}select,input{width:100%;padding:10px;border:1px solid var(--l);background:white}.key{border-top:1px solid var(--l);margin-top:23px;padding-top:2px}.key small{float:right;color:var(--g)}
+    .chat{display:flex;flex-direction:column;min-height:0}.messages{flex:1;min-height:68vh;overflow:auto;padding:28px}.msg{max-width:770px;margin:0 0 17px;padding:16px 18px;border:1px solid var(--l);background:var(--p);white-space:pre-wrap;line-height:1.72;font-size:14px}.user{margin-left:auto;background:#e7f5ed}.meta{display:flex;justify-content:space-between;margin-bottom:10px;font-size:11px;font-weight:700}.badge{padding:2px 6px;color:var(--g);background:#dff1e7}.trace{margin-top:10px;padding-top:9px;border-top:1px dashed var(--l);font-size:11px;color:var(--m)}
+    form{margin:0 28px 24px;border:1px solid #9db8aa;background:white}textarea{width:100%;min-height:95px;padding:15px;border:0;resize:vertical;font:14px/1.6 inherit}form div{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border-top:1px solid #edf0eb}button{padding:8px 20px;border:0;color:white;background:var(--g);cursor:pointer}button:disabled{opacity:.5}
+    .source{width:100%;margin:0 0 10px;padding:12px;border:1px solid var(--l);background:white;color:#17372f;text-align:left}.source strong,.source span{display:block}.source span{margin-top:5px;font-size:10px;color:var(--m)}pre{max-height:330px;overflow:auto;white-space:pre-wrap;font:11px/1.6 inherit}.detail a{margin-right:10px;color:var(--g);font-size:11px}
+    @media(max-width:980px){main{grid-template-columns:230px 1fr}.right{grid-column:1/-1;border:0;border-top:1px solid var(--l)}}@media(max-width:680px){main{display:block}.left{border:0;border-bottom:1px solid var(--l)}h1,.intro{display:none}.messages{min-height:48vh;padding:16px}form{margin:0 16px 18px}.right{display:none}}
+  </style>
+</head>
+<body>
+  <header class="top"><div class="brand"><b>SWUFE</b>西财教务助手</div><div class="state" id="globalState">正在连接知识库…</div></header>
+  <main>
+    <aside class="side left">
+      <h1>先理解问题，<br>再查询可信事实。</h1>
+      <p class="intro">课程表走全校结构化 SQL；制度与文字说明走 RAG；模型只负责理解和自然表达。</p>
+      <label for="college">学院（可选）</label><select id="college"><option value="">自动识别</option></select>
+      <label for="cohort">入学年级（可选）</label><select id="cohort"><option value="">自动识别</option></select>
+      <section class="key"><label for="apiKey">DeepSeek API Key <small>仅本次请求</small></label><input id="apiKey" type="password" autocomplete="new-password" placeholder="sk-…"><p class="hint">不写入本地配置或浏览器存储。页面只在后端实际调用成功时显示“LLM 已参与”。</p></section>
+    </aside>
+    <section class="chat">
+      <div class="messages" id="messages"><article class="msg"><div class="meta"><span>教务助手</span><b class="badge">准备就绪</b></div>例如：23级会计学第一学期有哪些课？人工智能23级大三下有哪些选修课？2023级公共外语要修多少学分？</article></div>
+      <form id="form"><textarea id="question" maxlength="2000" placeholder="输入问题；Enter 发送，Shift+Enter 换行" required></textarea><div><span class="state" id="status">等待提问</span><button type="submit">发送</button></div></form>
+    </section>
+    <aside class="side right"><div class="meta"><strong>原文与页码</strong><span id="sourceCount">0</span></div><div id="sources" class="empty">回答引用会显示在这里。</div><div id="detail" class="detail"></div></aside>
+  </main>
+  <script>
+    const $=id=>document.getElementById(id);const sid=sessionStorage.getItem("swufe-v2-session")||crypto.randomUUID();sessionStorage.setItem("swufe-v2-session",sid);
+    async function api(path,options={}){const r=await fetch(path,{...options,headers:{"Content-Type":"application/json",...(options.headers||{})}});const p=await r.json().catch(()=>({}));if(!r.ok)throw new Error(p.detail||`HTTP ${r.status}`);return p}
+    function message(role,text,p={}){const a=document.createElement("article");a.className=`msg ${role}`;const m=document.createElement("div");m.className="meta";const n=document.createElement("span");n.textContent=role==="user"?"你":"教务助手";const b=document.createElement("b");b.className="badge";b.textContent=role==="user"?"已发送":p.refused?"证据不足":p.llm_called?`LLM 已参与 · ${p.execution_path}`:`无 LLM · ${p.execution_path||"本地"}`;m.append(n,b);a.append(m,document.createTextNode(text));if(role!=="user"&&p.query_plan){const t=document.createElement("div");t.className="trace";const stages=Object.entries(p.llm_stages||{}).filter(x=>x[1]).map(x=>x[0]).join("、")||"无";t.textContent=`意图 ${p.query_plan.intent}｜工具 ${p.execution_path}｜LLM阶段 ${stages}｜SQL覆盖 ${p.sql_coverage===null?"不适用":p.sql_coverage?"是":"否"}${p.fallback?`｜兜底 ${p.fallback}`:""}｜${p.latency_ms} ms`;a.append(t)}$("messages").append(a);a.scrollIntoView({behavior:"smooth",block:"end"})}
+    function renderSources(p){const host=$("sources");host.replaceChildren();for(const c of p.citations||[]){const b=document.createElement("button");b.className="source";const s=document.createElement("strong");s.textContent=`[${c.marker}] ${c.doc_title}`;const x=document.createElement("span");x.textContent=`${c.article} · ${c.chunk_id}`;b.append(s,x);b.onclick=()=>loadSource(c.chunk_id);host.append(b)}$("sourceCount").textContent=String((p.citations||[]).length);if(!(p.citations||[]).length)host.textContent="本轮没有可核验引用。"}
+    async function loadSource(id){const s=await api(`/source/${encodeURIComponent(id)}`);$("detail").replaceChildren();const h=document.createElement("h3");h.textContent=s.doc_title;const p=document.createElement("p");p.className="hint";p.textContent=`${s.article} · ${s.cohort}`;const pre=document.createElement("pre");pre.textContent=s.text;const page=document.createElement("a");page.href=s.page_url;page.target="_blank";page.textContent="通知页 →";const file=document.createElement("a");file.href=s.file_url;file.target="_blank";file.textContent="下载原文件 →";$("detail").append(h,p,pre,page,file)}
+    async function boot(){try{const o=await api("/options");for(const v of o.colleges||[])$("college").append(new Option(v,v));for(const v of o.cohorts||[])$("cohort").append(new Option(v,v));$("globalState").textContent=`${o.chunk_count} 知识块 · ${o.primary_course_offerings||0} 课程记录 · ${o.structured_plans||0} 专业方案`}catch(e){$("globalState").textContent=e.message}}
+    $("form").onsubmit=async e=>{e.preventDefault();const q=$("question").value.trim();if(!q)return;message("user",q);$("question").value="";const btn=e.currentTarget.querySelector("button");btn.disabled=true;$("status").textContent="理解问题并查询证据中…";try{const key=$("apiKey").value.trim();const p=await api("/ask",{method:"POST",headers:key?{"X-LLM-API-Key":key}:{},body:JSON.stringify({question:q,college:$("college").value||null,cohort:$("cohort").value||null,session_id:sid})});message("assistant",p.answer_md,p);renderSources(p);$("status").textContent=`完成 · ${p.execution_path} · ${p.llm_called?"LLM已参与":"LLM未参与"}`}catch(err){$("status").textContent=`失败：${err.message}`}finally{btn.disabled=false;$("question").focus()}};
+    $("question").onkeydown=e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();$("form").requestSubmit()}};window.addEventListener("pagehide",()=>$("apiKey").value="");boot();
+  </script>
+</body>
+</html>

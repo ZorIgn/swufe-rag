@@ -1,0 +1,24 @@
+{
+  "baseline_unmarked": 2712,
+  "pdf_row_repaired": 44,
+  "ambiguous_pdf_rows": 0,
+  "remaining_without_declared_semester": 2668,
+  "remaining_by_cohort": {
+    "2017": 2636,
+    "2018": 12,
+    "2019": 1,
+    "2021": 1,
+    "2022": 2,
+    "2023": 16
+  },
+  "remaining_by_module": {
+    "（七）自由选修课": 1862,
+    "（六）实践环节课": 322,
+    "（七）实践环节课": 226,
+    "（四）实践环节课": 91,
+    "(六)实践环节课": 63,
+    "（六）自由选修课": 50,
+    "（六）实践环节": 49,
+    "（八）自由选修课": 5
+  }
+}

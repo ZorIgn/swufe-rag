@@ -1,0 +1,92 @@
+[
+  {
+    "mode": "school_rag",
+    "answer_md": "2023级人工智能专业第6学期的选修课程共3门：\n- 第6学期:CST344 机器视觉,3学分,选修,(四)专业方向课,周学时3,总学时51,课堂学时27,实践学时24[1]。\n- 第6学期:CST345 知识图谱与应用,3学分,选修,(四)专业方向课,周学时3,总学时51,课堂学时27,实践学时24[1]。\n- 第6学期:DSC202 数据可视化,3学分,选修,(四)专业方向课,周学时3,总学时51,课堂学时27,实践学时24[2]。\n\n来源文件与页码：\n- [1]《西南财经大学2023级本科人才培养方案（完整总册）》，原文件第467页\n- [2]《西南财经大学2023级本科人才培养方案（完整总册）》，原文件第466页",
+    "refused": false,
+    "latency_ms": 7316.97,
+    "execution_path": "sql+llm",
+    "llm_called": true,
+    "llm_stages": {
+      "question_understanding": true,
+      "sql_execution": true,
+      "rag_retrieval": false,
+      "answer_generation": true,
+      "fact_validation": true
+    },
+    "model": "deepseek-chat",
+    "query_plan": {
+      "domain": "school",
+      "intent": "course_list",
+      "college": null,
+      "major": "人工智能",
+      "cohort": 2023,
+      "semester": [
+        6
+      ],
+      "course_nature": [
+        "选修"
+      ],
+      "course_name": null,
+      "requires_sql": true,
+      "requires_rag": false,
+      "missing_fields": [],
+      "normalized_query": "2023级人工智能专业大三下学期有哪些选修课",
+      "confidence": 0.95,
+      "parser": "llm",
+      "tool": "sql"
+    },
+    "sql_coverage": true,
+    "fallback": null,
+    "answer_generation_error": null,
+    "timings": {
+      "question_understanding_ms": 4367.66,
+      "sql_execution_ms": 877.91,
+      "answer_generation_ms": 2066.49,
+      "total_ms": 7316.97
+    }
+  },
+  {
+    "mode": "school_rag",
+    "answer_md": "根据《西南财经大学2023级本科人才培养方案(完整总册)》,2023级公共外语课程共需修读 **8个学分**[1][2][3]。\n\n来源文件与页码：\n- [1]《西南财经大学2023级本科人才培养方案（完整总册）》，原文件第283页\n- [2]《西南财经大学2023级本科人才培养方案（完整总册）》，原文件第9页\n- [3]《西南财经大学2023级本科人才培养方案（完整总册）》，原文件第322页",
+    "refused": false,
+    "latency_ms": 9365.5,
+    "execution_path": "rag+llm",
+    "llm_called": true,
+    "llm_stages": {
+      "question_understanding": true,
+      "sql_execution": false,
+      "rag_retrieval": true,
+      "answer_generation": true,
+      "fact_validation": true
+    },
+    "model": "deepseek-chat",
+    "query_plan": {
+      "domain": "school",
+      "intent": "school_requirement",
+      "college": null,
+      "major": null,
+      "cohort": 2023,
+      "semester": [],
+      "course_nature": [
+        "必修"
+      ],
+      "course_name": "公共外语",
+      "requires_sql": false,
+      "requires_rag": true,
+      "missing_fields": [],
+      "normalized_query": "2023级公共外语一共要修多少学分",
+      "confidence": 0.95,
+      "parser": "llm",
+      "tool": "rag"
+    },
+    "sql_coverage": null,
+    "fallback": null,
+    "answer_generation_error": null,
+    "timings": {
+      "question_understanding_ms": 1388.78,
+      "rag_retrieval_ms": 6877.39,
+      "answer_generation_ms": 1097.89,
+      "total_ms": 9365.5
+    }
+  }
+]

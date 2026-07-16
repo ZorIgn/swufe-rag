@@ -1,0 +1,50 @@
+{
+  "integrity": "ok",
+  "foreign_key_errors": [],
+  "null_course_evidence": 0,
+  "duplicate_course_rows": 10,
+  "null_total_hours": 62,
+  "unmarked_semester": 2668,
+  "cohorts": [
+    {
+      "cohort": 2017,
+      "plans": 53,
+      "course_rows": 6065
+    },
+    {
+      "cohort": 2018,
+      "plans": 56,
+      "course_rows": 6601
+    },
+    {
+      "cohort": 2019,
+      "plans": 56,
+      "course_rows": 3553
+    },
+    {
+      "cohort": 2020,
+      "plans": 57,
+      "course_rows": 3785
+    },
+    {
+      "cohort": 2021,
+      "plans": 65,
+      "course_rows": 4365
+    },
+    {
+      "cohort": 2022,
+      "plans": 64,
+      "course_rows": 4095
+    },
+    {
+      "cohort": 2023,
+      "plans": 61,
+      "course_rows": 3998
+    },
+    {
+      "cohort": 2024,
+      "plans": 56,
+      "course_rows": 3356
+    }
+  ]
+}
