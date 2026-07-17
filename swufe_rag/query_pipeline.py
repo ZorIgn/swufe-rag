@@ -259,7 +259,9 @@ class QueryPipelineRuntime(HybridRuntime):
                 parts = []
                 for major, row in rows:
                     marker = cite(row.get("evidence_chunk_id"))
-                    parts.append(f"{major.removesuffix('\u4e13\u4e1a')}{float(row['required_credits']):g}\u5b66\u5206" + (f"[{marker}]" if marker else ""))
+                    major_label = major.removesuffix("\u4e13\u4e1a")
+                    required_credits = float(row["required_credits"])
+                    parts.append(f"{major_label}{required_credits:g}\u5b66\u5206" + (f"[{marker}]" if marker else ""))
                 answer = "2023\u7ea7\u57f9\u517b\u65b9\u6848\u4e2d\uff0c" + "\uff0c".join(parts) + "\u3002"
                 return {"mode": "school_rag", "answer_md": answer + _source_appendix(citations), "citations": citations,
                         "retrieved": [], "official_links": [], "refused": False}
