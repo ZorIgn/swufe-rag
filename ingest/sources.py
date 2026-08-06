@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import csv
+import re
 from datetime import date
 from pathlib import Path, PurePosixPath
-import re
 from urllib.parse import urlparse
 
-from contracts import ContractError
+from ingest.contracts import ContractError
 from ingest.models import SourceRecord
-
 
 SOURCE_FIELDS = (
     "file",

@@ -1,5 +1,5 @@
-"""Trusted metadata storage for school-policy retrieval and citations."""
+"""Canonical storage utilities."""
 
-from storage.metadata_db import MetadataDB, OfficialLink, StoredChunk
+from storage.redaction import redact_secrets
 
-__all__ = ["MetadataDB", "OfficialLink", "StoredChunk"]
+__all__ = ["redact_secrets"]

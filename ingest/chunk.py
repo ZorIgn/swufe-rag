@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from hashlib import sha256
-import re
 from urllib.parse import urlsplit, urlunsplit
 
-from contracts import KnowledgeChunk, validate_chunk
+from ingest.contracts import KnowledgeChunk, validate_chunk
 from ingest.models import DocumentElement, ParsedDocument, SourceRecord
 from ingest.parse import join_wrapped_lines, normalize_text
-
 
 _NUMERALS = "〇零一二三四五六七八九十百千万0-9"
 _CHAPTER_RE = re.compile(rf"^\s*(第[{_NUMERALS}]+[章节])\s*(.*?)\s*$")

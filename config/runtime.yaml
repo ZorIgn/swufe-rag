@@ -1,0 +1,24 @@
+service:
+  request_max_bytes: 32768
+  rate_limit_per_minute: 60
+  cors_allow_origins: []
+  max_tool_calls: 8
+  tool_timeout_seconds: 15
+  session_ttl_seconds: 1800
+  session_max_messages: 12
+  session_max_sessions: 10000
+retrieval:
+  candidate_k: 40
+  final_k: 8
+  scope_cache_max_entries: 128
+  mmr_lambda: 0.85
+generation:
+  max_tokens: 1200
+  provider_timeout_seconds: 45
+  max_retries: 2
+dataset:
+  catalog: data/curriculum_catalog.json
+  sources: data/sources.csv
+  chunks: data/chunks.jsonl
+  database: data/academic.sqlite3
+  manifest_dir: artifacts/manifests

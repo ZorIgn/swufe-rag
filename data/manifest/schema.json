@@ -1,0 +1,17 @@
+{
+  "schema_version": "1",
+  "description": "Schema for immutable build manifests emitted under artifacts/manifests/.",
+  "required": [
+    "dataset_version",
+    "schema_version",
+    "parser_version",
+    "source_count",
+    "page_count",
+    "source_hashes",
+    "chunk_count",
+    "program_count",
+    "course_count",
+    "requirement_count",
+    "created_at"
+  ]
+}

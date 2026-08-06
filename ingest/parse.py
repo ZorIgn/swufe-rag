@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import re
 import unicodedata
-from typing import Any, Protocol, Sequence
+from collections.abc import Sequence
+from pathlib import Path
+from typing import Any, Protocol
 
 from ingest.models import DocumentElement, ElementKind, ParsedDocument
 
@@ -272,7 +273,7 @@ def _parse_pdf(path: Path, ocr_provider: OCRProvider | None) -> ParsedDocument:
     image_only_pages = [
         page_number
         for page_number, (text, tables, has_images) in enumerate(
-            zip(page_texts, page_tables, page_has_images), start=1
+            zip(page_texts, page_tables, page_has_images, strict=True), start=1
         )
         if not text and not tables and has_images
     ]
@@ -292,7 +293,7 @@ def _parse_pdf(path: Path, ocr_provider: OCRProvider | None) -> ParsedDocument:
 
     elements: list[DocumentElement] = []
     web_print_cleaned = False
-    for page_number, (text, tables) in enumerate(zip(page_texts, page_tables), start=1):
+    for page_number, (text, tables) in enumerate(zip(page_texts, page_tables, strict=True), start=1):
         web_print_page = _is_web_print_page(text)
         if text and not web_print_page:
             elements.append(DocumentElement("paragraph", text, page=page_number))

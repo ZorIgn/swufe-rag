@@ -1,0 +1,10 @@
+{
+  "program_aliases": {
+    "X专业": "测试专业X",
+    "Y专业": "测试专业Y"
+  },
+  "module_aliases": {
+    "专选": "专业选修课"
+  },
+  "course_aliases": {}
+}

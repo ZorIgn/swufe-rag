@@ -1,4 +1,4 @@
-name: offline-contract-tests
+name: canonical-academic-agent
 
 on:
   push:
@@ -9,21 +9,42 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
-          cache: pip
-      - name: Install test dependencies
-        run: python -m pip install -r requirements-dev.txt
-      - name: Compile sources
-        run: python -m compileall -q contracts.py retrieval generation app eval swufe_rag academic_audit storage tests
-      - name: Build generated academic database
-        run: python -m scripts.rebuild_academic_database_v2
-      - name: Run offline test suite
+          python-version: ${{ matrix.python-version }}
+      - name: Install canonical development dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Lint
+        run: python -m ruff check agent academic app evidence generation ingest query retrieval storage scripts/build_all.py scripts/download_dataset.py scripts/verify_dataset.py eval/run_generalization.py eval/run_retrieval_ablation.py tests/canonical
+      - name: Type check
+        run: python -m mypy agent academic app evidence query generation retrieval storage
+      - name: Compile canonical sources
+        run: python -m compileall -q agent academic app evidence generation ingest query retrieval storage scripts/build_all.py scripts/download_dataset.py scripts/verify_dataset.py eval/run_generalization.py eval/run_retrieval_ablation.py tests/canonical
+      - name: Build versioned CI data fixture
+        run: >-
+          python -m scripts.build_all
+          --database "$RUNNER_TEMP/academic.sqlite3"
+          --catalog tests/canonical/data/catalog.json
+          --sources tests/canonical/data/sources.csv
+          --chunks tests/canonical/data/chunks.jsonl
+          --aliases tests/canonical/data/aliases.json
+          --manifest-dir "$RUNNER_TEMP/manifests"
+      - name: Verify CI data fixture
+        run: python -m scripts.verify_dataset --database "$RUNNER_TEMP/academic.sqlite3"
+      - name: Unit and contract tests
         env:
           PYTHONUTF8: "1"
           HF_HUB_OFFLINE: "1"
           TRANSFORMERS_OFFLINE: "1"
-        run: python -m pytest -q
+        run: python -m pytest -q tests/canonical --cov=agent --cov=academic --cov=query --cov=evidence --cov=generation --cov=app --cov-fail-under=50
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Docker build
+        run: docker build -t swufe-rag:ci .
