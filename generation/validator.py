@@ -46,10 +46,7 @@ def _fact_support(
 
 
 def _is_school_factual(facts: list[Fact | DerivedFact]) -> bool:
-    return any(
-        fact.type in SCHOOL_FACT_TYPES or bool(fact.source_record_ids)
-        for fact in facts
-    )
+    return any(fact.type in SCHOOL_FACT_TYPES or bool(fact.source_record_ids) for fact in facts)
 
 
 def _allowed_strings(facts: list[Fact | DerivedFact]) -> tuple[set[str], set[str]]:
@@ -64,6 +61,38 @@ def _allowed_strings(facts: list[Fact | DerivedFact]) -> tuple[set[str], set[str
     return numbers, codes
 
 
+def _entailment_terms(value: object) -> set[str]:
+    """Return generic lexical units for a conservative claim/evidence check."""
+
+    text = str(value or "")
+    units = re.findall(r"[A-Za-z0-9]{2,}|[\u3400-\u9fff]{2,}", text.lower())
+    return set(units)
+
+
+def _claim_supported_by_text(
+    claim_text: str, facts: list[Fact | DerivedFact], packet: EvidencePacket
+) -> bool:
+    claim_terms = _entailment_terms(claim_text)
+    if not claim_terms:
+        return False
+    supporting_terms: set[str] = set()
+    for fact in facts:
+        supporting_terms.update(_entailment_terms(fact.subject))
+        supporting_terms.update(_entailment_terms(fact.value))
+        for evidence_id in _fact_support(packet, fact.fact_id)[0]:
+            evidence = packet.evidence_by_id(evidence_id)
+            if evidence is not None:
+                supporting_terms.update(_entailment_terms(evidence.quote))
+    return bool(claim_terms & supporting_terms)
+
+
+def _citation_supports_claim(claim_text: str, evidence_id: str, packet: EvidencePacket) -> bool:
+    evidence = packet.evidence_by_id(evidence_id)
+    return evidence is not None and bool(
+        _entailment_terms(claim_text) & _entailment_terms(evidence.quote)
+    )
+
+
 class ClaimValidator:
     """Validate claim-level fact and evidence bindings before rendering an answer."""
 
@@ -76,9 +105,7 @@ class ClaimValidator:
                         claim_id=span.validation.claim_id,
                         passed=False,
                         reasons=tuple(
-                            dict.fromkeys(
-                                (*span.validation.reasons, "source_version_conflict")
-                            )
+                            dict.fromkeys((*span.validation.reasons, "source_version_conflict"))
                         ),
                     )
                 }
@@ -133,16 +160,19 @@ class ClaimValidator:
                     reasons.append("school_fact_missing_evidence_binding")
 
             numbers, codes = _allowed_strings(facts)
-            mentioned_numbers = {
-                f"{float(value):g}" for value in NUMBER_RE.findall(span.text)
-            }
-            mentioned_codes = {
-                value.upper() for value in COURSE_CODE_RE.findall(span.text)
-            }
+            mentioned_numbers = {f"{float(value):g}" for value in NUMBER_RE.findall(span.text)}
+            mentioned_codes = {value.upper() for value in COURSE_CODE_RE.findall(span.text)}
             if not mentioned_numbers.issubset(numbers):
                 reasons.append("number_not_bound_to_claim_fact")
             if not mentioned_codes.issubset(codes):
                 reasons.append("course_code_not_bound_to_claim_fact")
+            if _is_school_factual(facts) and not _claim_supported_by_text(span.text, facts, packet):
+                reasons.append("claim_not_entailed_by_fact")
+            if provided_evidence and any(
+                not _citation_supports_claim(span.text, identifier, packet)
+                for identifier in provided_evidence
+            ):
+                reasons.append("citation_not_supporting_claim")
             validation = ClaimValidation(
                 claim_id=span.validation.claim_id,
                 passed=not reasons,

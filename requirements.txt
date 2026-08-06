@@ -1,8 +1,0 @@
-numpy>=1.26,<3
-PyYAML>=6.0,<7
-sentence-transformers>=3.0,<6
-faiss-cpu>=1.8,<2
-rank-bm25>=0.2.2,<1
-jieba>=0.42.1,<1
-openai>=1.40,<3
-

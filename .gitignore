@@ -49,4 +49,10 @@ tmp/
 .vscode/
 .DS_Store
 Thumbs.db
-
+# Released data packages and generated historical analysis
+data/it/
+data/school/
+data/sources.csv
+data/sources.xlsx
+data/source_review.csv
+analysis-output/

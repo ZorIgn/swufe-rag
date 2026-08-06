@@ -28,12 +28,46 @@ def _operation_id(query: NormalizedQuery, operation_type: str) -> str:
     return stable_id("op", query.raw_question, operation_type)
 
 
+def _composite_operations(query: NormalizedQuery) -> tuple[Operation, ...]:
+    """Plan the generic structured-plus-policy composite requested by the user."""
+
+    required = {"module_requirements", "course_list", "policy_explanation"}
+    if not required.issubset(query.requested_outputs):
+        return ()
+    if query.cohort is None or not query.program_ids:
+        return ()
+    program_id = query.program_ids[0]
+    return (
+        GetModuleRequirementsOperation(
+            operation_id=_operation_id(query, "get_module_requirements"),
+            args=GetModuleRequirementsArgs(cohort=query.cohort, program_id=program_id, module_ids=query.module_ids),
+        ),
+        ListCoursesOperation(
+            operation_id=_operation_id(query, "list_courses"),
+            args=ListCoursesArgs(
+                cohort=query.cohort,
+                program_id=program_id,
+                semesters=query.semesters,
+                course_natures=query.course_natures,
+                module_ids=query.module_ids,
+                course_ids=query.course_ids,
+            ),
+        ),
+        RetrievePolicyOperation(
+            operation_id=_operation_id(query, "retrieve_policy"),
+            args=RetrievePolicyArgs(question=query.raw_question, cohort=query.cohort, program_ids=query.program_ids),
+        ),
+    )
+
 def build_plan(query: NormalizedQuery) -> ExecutionPlan:
     """Return a DAG-ready plan. Independent tools have no dependencies."""
     if query.missing_fields or query.intent == "general":
         return ExecutionPlan(plan_id=stable_id("plan", query.raw_question), query=query, operations=())
     operations: tuple[Operation, ...]
-    if query.intent == "policy":
+    composite = _composite_operations(query)
+    if composite:
+        operations = composite
+    elif query.intent == "policy":
         operations = (RetrievePolicyOperation(
             operation_id=_operation_id(query, "retrieve_policy"),
             args=RetrievePolicyArgs(question=query.raw_question, cohort=query.cohort, program_ids=query.program_ids),

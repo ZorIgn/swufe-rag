@@ -12,7 +12,9 @@ def test_public_endpoints_share_one_runtime(canonical_runtime) -> None:
     client = TestClient(create_app(canonical_runtime))
     assert client.get("/health/live").status_code == 200
     assert client.get("/health/ready").status_code == 200
-    result = client.post("/ask", json={"question": "2024级X专业第1学期有哪些选修课？", "debug": True})
+    result = client.post(
+        "/ask", json={"question": "2024级X专业第1学期有哪些选修课？", "debug": True}
+    )
     assert result.status_code == 200
     payload = result.json()
     assert payload["debug"]["tool_calls"] == ["academic.list_courses"]
@@ -40,11 +42,17 @@ def test_provider_requires_explicit_endpoint_and_model() -> None:
             continue
         raise AssertionError("provider configuration must be explicit")
 
+
 def test_academic_audit_uses_canonical_agent(canonical_runtime) -> None:
     client = TestClient(create_app(canonical_runtime))
-    response = client.post("/academic-audit", json={"cohort": 2024, "major": "测试专业X", "completed_courses": ["TST101"]})
+    response = client.post(
+        "/academic-audit",
+        json={"cohort": 2024, "major": "测试专业X", "completed_courses": ["TST101"]},
+    )
     assert response.status_code == 200
     assert response.json()["request_id"]
+    assert response.json()["refused"] is False
+    assert response.json()["citations"]
 
 
 class _RecordingModel:

@@ -1,27 +1,18 @@
 # 数据目录
 
-- `raw/`：审核通过的官网原始文件；只保存在本地并被 Git 忽略。
-- `ocr/`：扫描 PDF 的逐页 OCR 旁车 JSON；只保存在本地并被 Git 忽略。
-- `sources.csv`：已审核并允许进入知识库的来源登记表，路径均相对 `data/raw/`。
-- `source_review.csv`：模块 A 原交接包的逐文件审批决定与原因。
-- `chunks.jsonl`：模块 A 生成、模块 B 唯一认可的生产知识块文件。
-- `metadata.sqlite3`：混合服务按来源和知识块哈希自动生成的可信范围/URL 数据库；本地产物，不提交 Git。
-
-测试数据只能放在 `tests/fixtures/`，不得复制到本目录冒充正式知识库。
-
-构建前安装解析依赖：
+生产数据包不提交到 Git。取得数据发布包后，将 `sources.csv`、`chunks.jsonl` 与
+`curriculum_catalog.json` 放入本目录，或运行：
 
 ```powershell
-pip install -r requirements-ingest.txt
-python -m ingest --sources data/sources.csv --raw-dir data/raw `
-  --ocr-dir data/ocr --output data/chunks.jsonl --report data/ingest_report.json
+python -m scripts.download_dataset --source-dir <released-data-directory>
+# 或：python -m scripts.download_dataset --url <dataset-zip-url>
+python -m scripts.build_all
+python -m scripts.verify_dataset --allow-unverified-requirements
 ```
 
-扫描件先在 Windows 上生成旁车文件：
+构建会生成本地 `academic.sqlite3` 和 `artifacts/manifests/` 下的不可变清单。若要从原始 PDF/DOCX 重新解析知识块，先运行 `uv sync --extra ingest`。
+原始文件可保存在 `raw/`，OCR 旁车文件保存在 `ocr/`；二者以及构建产物均被 Git
+忽略。用于 CI 的最小公开夹具位于 `tests/canonical/data/`，不能作为生产知识库。
 
-```powershell
-.\tools\windows_ocr.ps1 -PdfPath data\raw\school\扫描件.pdf `
-  -OutputPath data\ocr\扫描件.pdf.ocr.json
-```
-
-解析过程按严格契约失败闭合：缺文件、旧式 DOC、未解包 ZIP、扫描件缺 OCR、非学校域名 URL 或非法枚举都会终止整次构建，不会静默跳过。
+来源、课程、培养要求或知识块发生变更后，应重新执行构建和完整性校验，不应手工修改
+SQLite 或清单中的统计信息。

@@ -29,6 +29,15 @@ Intent = Literal[
 
 StageTerm = Literal["spring", "autumn", "summer"]
 CourseNature = Literal["required", "elective", "free_elective"]
+RequestedOutput = Literal[
+    "course_list",
+    "course_detail",
+    "module_requirements",
+    "policy_explanation",
+    "graduation_requirements",
+    "progress_audit",
+    "comparison",
+]
 InformationScope = Literal["curriculum", "actual_offerings", "policy", "unknown"]
 
 
@@ -44,7 +53,7 @@ class UnderstandingDraft(StrictModel):
         "compare_programs",
         "general",
     ]
-    requested_outputs: tuple[str, ...] = ()
+    requested_outputs: tuple[RequestedOutput, ...] = ()
     program_mentions: tuple[str, ...] = ()
     cohort: int | None = Field(default=None, ge=2010, le=2100)
     current_stage: AcademicStage | None = None
@@ -56,9 +65,10 @@ class UnderstandingDraft(StrictModel):
     completed_courses: tuple[str, ...] = ()
     information_scope: Literal["curriculum", "actual_offerings", "policy", "unknown"] = "unknown"
     parser: Literal["deterministic", "llm"] = "deterministic"
-    failure_reason: Literal[
-        "invalid_json", "schema_error", "missing_constraint", "conflict", "provider_error"
-    ] | None = None
+    failure_reason: (
+        Literal["invalid_json", "schema_error", "missing_constraint", "conflict", "provider_error"]
+        | None
+    ) = None
 
 
 class ResolvedEntity(StrictModel):
@@ -72,7 +82,7 @@ class NormalizedQuery(StrictModel):
     schema_version: Literal["normalized-1"] = "normalized-1"
     raw_question: str = Field(min_length=1, max_length=4000)
     intent: Intent
-    requested_outputs: tuple[str, ...] = ()
+    requested_outputs: tuple[RequestedOutput, ...] = ()
     cohort: int | None = Field(default=None, ge=2010, le=2100)
     program_ids: tuple[str, ...] = ()
     program_names: tuple[str, ...] = ()
@@ -153,7 +163,14 @@ class CompareProgramsArgs(StrictModel):
     cohort: int = Field(ge=2010, le=2100)
     program_ids: tuple[str, ...] = Field(min_length=2)
     dimensions: tuple[
-        Literal["graduation_min_credits", "module_requirements", "course_sets", "required_courses", "practice_requirements"], ...
+        Literal[
+            "graduation_min_credits",
+            "module_requirements",
+            "course_sets",
+            "required_courses",
+            "practice_requirements",
+        ],
+        ...,
     ] = ("graduation_min_credits", "module_requirements", "course_sets")
 
 
@@ -189,7 +206,7 @@ class GetGraduationRequirementsOperation(OperationBase):
 
 class GetModuleRequirementsOperation(OperationBase):
     type: Literal["get_module_requirements"] = "get_module_requirements"
-    tool_name: Literal["academic.get_requirements"] = "academic.get_requirements"
+    tool_name: Literal["academic.get_module_requirements"] = "academic.get_module_requirements"
     args: GetModuleRequirementsArgs
 
 
@@ -236,7 +253,17 @@ class ResolveSourceOperation(OperationBase):
 
 
 Operation = Annotated[
-    ListCoursesOperation | GetCourseDetailOperation | GetGraduationRequirementsOperation | GetModuleRequirementsOperation | AuditCompletedCoursesOperation | ListCoursesBeforeSemesterOperation | ListUnavoidableCoursesOperation | CheckCurriculumFeasibilityOperation | RetrievePolicyOperation | CompareProgramsOperation | ResolveSourceOperation,
+    ListCoursesOperation
+    | GetCourseDetailOperation
+    | GetGraduationRequirementsOperation
+    | GetModuleRequirementsOperation
+    | AuditCompletedCoursesOperation
+    | ListCoursesBeforeSemesterOperation
+    | ListUnavoidableCoursesOperation
+    | CheckCurriculumFeasibilityOperation
+    | RetrievePolicyOperation
+    | CompareProgramsOperation
+    | ResolveSourceOperation,
     Field(discriminator="type"),
 ]
 
@@ -277,4 +304,5 @@ __all__ = [name for name in globals() if name.endswith(("Args", "Operation"))] +
     "ResolvedEntity",
     "UnderstandingDraft",
     "StageTerm",
+    "RequestedOutput",
 ]

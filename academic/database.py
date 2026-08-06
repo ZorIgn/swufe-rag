@@ -152,7 +152,9 @@ def _source_rows(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(handle))
 
 
-def _source_index(rows: Iterable[dict[str, str]]) -> tuple[dict[tuple[str, str], dict[str, str]], dict[str, dict[str, str]]]:
+def _source_index(
+    rows: Iterable[dict[str, str]],
+) -> tuple[dict[tuple[str, str], dict[str, str]], dict[str, dict[str, str]]]:
     exact: dict[tuple[str, str], dict[str, str]] = {}
     title_only: dict[str, dict[str, str]] = {}
     for row in rows:
@@ -181,11 +183,25 @@ def _materialize_sources(
         effective_from = str(row.get("effective_from") or published_at or "").strip() or None
         effective_to = str(row.get("effective_to") or "").strip() or None
         supersedes = str(row.get("supersedes_source_id") or "").strip() or None
-        values.append((
-            identifier, title, row.get("level", ""), row.get("college", ""), cohort, authority,
-            published_at, effective_from, effective_to, supersedes, row.get("status", "历史"),
-            row.get("page_url"), url, _sha(local), row.get("collected_at"),
-        ))
+        values.append(
+            (
+                identifier,
+                title,
+                row.get("level", ""),
+                row.get("college", ""),
+                cohort,
+                authority,
+                published_at,
+                effective_from,
+                effective_to,
+                supersedes,
+                row.get("status", "历史"),
+                row.get("page_url"),
+                url,
+                _sha(local),
+                row.get("collected_at"),
+            )
+        )
     connection.executemany(
         "INSERT INTO sources VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", values
     )
@@ -193,7 +209,10 @@ def _materialize_sources(
 
 
 def _source_for(
-    title: str, cohort: int, source_ids: dict[tuple[str, str], str], title_rows: dict[str, dict[str, str]]
+    title: str,
+    cohort: int,
+    source_ids: dict[tuple[str, str], str],
+    title_rows: dict[str, dict[str, str]],
 ) -> str:
     found = source_ids.get((title, str(cohort)))
     if found:
@@ -213,7 +232,9 @@ def build_database(
     aliases_path: str | Path = DEFAULT_ALIAS_CONFIG,
 ) -> dict[str, object]:
     """Build a new immutable SQLite projection; generated output is not Git data."""
-    target, catalog_file, source_file, chunk_file = map(Path, (output, catalog_path, sources_path, chunks_path))
+    target, catalog_file, source_file, chunk_file = map(
+        Path, (output, catalog_path, sources_path, chunks_path)
+    )
     catalog = json.loads(catalog_file.read_text(encoding="utf-8"))
     source_rows = _source_rows(source_file)
     source_by_title_cohort, source_by_title = _source_index(source_rows)
@@ -237,8 +258,14 @@ def build_database(
             program_id = _program_id(plan["major"], plan["college"], cohort)
             program_rows.append((program_id, plan["major"], plan["college"], cohort, source_id))
             values = {str(plan["major"]), str(plan["major"]).removesuffix("专业")}
-            values.update(alias for alias, target_name in aliases["program_aliases"].items() if target_name == plan["major"])
-            alias_rows.update((alias, _normalized(alias), program_id) for alias in values if _normalized(alias))
+            values.update(
+                alias
+                for alias, target_name in aliases["program_aliases"].items()
+                if target_name == plan["major"]
+            )
+            alias_rows.update(
+                (alias, _normalized(alias), program_id) for alias in values if _normalized(alias)
+            )
             for module in plan.get("modules", []):
                 module_name = str(module["name"])
                 module_id = _module_id(program_id, module_name)
@@ -246,23 +273,44 @@ def build_database(
                 module_rows.append((module_id, program_id, module_name))
                 evidence = module.get("evidence") or {}
                 page = _page(evidence.get("article"))
-                requirement_rows.append((
-                    stable_id("req", program_id, module_name), program_id, module_id,
-                    module.get("required_credits"), module.get("listed_credits"), module.get("rule_text") or "",
-                    source_id, page, evidence.get("chunk_id"), PARSER_VERSION, 0.9 if evidence else 0.6,
-                    "verified" if evidence else "review_required",
-                ))
-        connection.executemany("INSERT OR IGNORE INTO programs VALUES (?, ?, ?, ?, ?)", program_rows)
-        connection.executemany("INSERT OR IGNORE INTO program_aliases VALUES (?, ?, ?)", sorted(alias_rows))
+                requirement_rows.append(
+                    (
+                        stable_id("req", program_id, module_name),
+                        program_id,
+                        module_id,
+                        module.get("required_credits"),
+                        module.get("listed_credits"),
+                        module.get("rule_text") or "",
+                        source_id,
+                        page,
+                        evidence.get("chunk_id"),
+                        PARSER_VERSION,
+                        0.9 if evidence else 0.6,
+                        "verified" if evidence else "review_required",
+                    )
+                )
+        connection.executemany(
+            "INSERT OR IGNORE INTO programs VALUES (?, ?, ?, ?, ?)", program_rows
+        )
+        connection.executemany(
+            "INSERT OR IGNORE INTO program_aliases VALUES (?, ?, ?)", sorted(alias_rows)
+        )
         connection.executemany("INSERT OR IGNORE INTO modules VALUES (?, ?, ?)", module_rows)
         module_alias_rows: set[tuple[str, str, str]] = set()
         for (_program_key, module_name), module_id in module_map.items():
             module_alias_rows.add((module_name, _normalized(module_name), module_id))
             for alias, target_name in aliases["module_aliases"].items():
-                if _normalized(target_name) in _normalized(module_name) or _normalized(module_name) in _normalized(target_name):
+                if _normalized(target_name) in _normalized(module_name) or _normalized(
+                    module_name
+                ) in _normalized(target_name):
                     module_alias_rows.add((alias, _normalized(alias), module_id))
-        connection.executemany("INSERT OR IGNORE INTO module_aliases VALUES (?, ?, ?)", sorted(module_alias_rows))
-        connection.executemany("INSERT OR IGNORE INTO requirements VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", requirement_rows)
+        connection.executemany(
+            "INSERT OR IGNORE INTO module_aliases VALUES (?, ?, ?)", sorted(module_alias_rows)
+        )
+        connection.executemany(
+            "INSERT OR IGNORE INTO requirements VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            requirement_rows,
+        )
         course_rows: list[tuple[str, str | None, str]] = []
         course_alias_rows: set[tuple[str, str, str]] = set()
         offering_rows: list[tuple[object, ...]] = []
@@ -273,8 +321,14 @@ def build_database(
             if module_id is None:
                 module_id = _module_id(program_id, course["module"])
                 module_map[(program_id, course["module"])] = module_id
-                connection.execute("INSERT OR IGNORE INTO modules VALUES (?, ?, ?)", (module_id, program_id, course["module"]))
-                connection.execute("INSERT OR IGNORE INTO module_aliases VALUES (?, ?, ?)", (course["module"], _normalized(course["module"]), module_id))
+                connection.execute(
+                    "INSERT OR IGNORE INTO modules VALUES (?, ?, ?)",
+                    (module_id, program_id, course["module"]),
+                )
+                connection.execute(
+                    "INSERT OR IGNORE INTO module_aliases VALUES (?, ?, ?)",
+                    (course["module"], _normalized(course["module"]), module_id),
+                )
             code = str(course.get("code") or "").upper() or None
             name = str(course["name"])
             course_id = _course_id(code, name)
@@ -285,16 +339,46 @@ def build_database(
                     course_alias_rows.add((alias, _normalized(alias), course_id))
             evidence = course.get("evidence") or {}
             source_id = _source_for(course["source_title"], cohort, source_ids, source_by_title)
-            record_id = stable_id("offering", program_id, module_id, course_id, course.get("semester"), course.get("page"), course.get("source_row"))
-            offering_rows.append((
-                record_id, program_id, module_id, course_id, course.get("nature"), _semester(course.get("semester")),
-                course.get("credits"), course.get("weekly_hours"), course.get("total_hours"), course.get("teaching_hours"),
-                course.get("practice_hours"), course.get("department"), source_id, course.get("page"), course.get("source_row"),
-                evidence.get("chunk_id"), PARSER_VERSION, 0.95 if evidence else 0.7, "verified" if evidence else "review_required",
-            ))
+            record_id = stable_id(
+                "offering",
+                program_id,
+                module_id,
+                course_id,
+                course.get("semester"),
+                course.get("page"),
+                course.get("source_row"),
+            )
+            offering_rows.append(
+                (
+                    record_id,
+                    program_id,
+                    module_id,
+                    course_id,
+                    course.get("nature"),
+                    _semester(course.get("semester")),
+                    course.get("credits"),
+                    course.get("weekly_hours"),
+                    course.get("total_hours"),
+                    course.get("teaching_hours"),
+                    course.get("practice_hours"),
+                    course.get("department"),
+                    source_id,
+                    course.get("page"),
+                    course.get("source_row"),
+                    evidence.get("chunk_id"),
+                    PARSER_VERSION,
+                    0.95 if evidence else 0.7,
+                    "verified" if evidence else "review_required",
+                )
+            )
         connection.executemany("INSERT OR IGNORE INTO courses VALUES (?, ?, ?)", course_rows)
-        connection.executemany("INSERT OR IGNORE INTO course_aliases VALUES (?, ?, ?)", sorted(course_alias_rows))
-        connection.executemany("INSERT OR IGNORE INTO program_courses VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", offering_rows)
+        connection.executemany(
+            "INSERT OR IGNORE INTO course_aliases VALUES (?, ?, ?)", sorted(course_alias_rows)
+        )
+        connection.executemany(
+            "INSERT OR IGNORE INTO program_courses VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            offering_rows,
+        )
         if chunk_file.is_file():
             sections: list[tuple[object, ...]] = []
             with chunk_file.open(encoding="utf-8") as stream:
@@ -303,12 +387,30 @@ def build_database(
                     title, cohort = str(value["doc_title"]), str(value.get("cohort") or "不限")
                     source_id = source_ids.get((title, cohort))
                     if source_id is None:
-                        source_id = _source_for(title, int(cohort) if cohort.isdigit() else 0, source_ids, source_by_title)
-                    sections.append((
-                        value["chunk_id"], source_id, value.get("article"), value["text"], _page(value.get("article")),
-                        int(bool(value.get("is_table"))), PARSER_VERSION, datetime.now(timezone.utc).isoformat(), 0.8, "unverified",
-                    ))
-            connection.executemany("INSERT OR IGNORE INTO source_sections VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", sections)
+                        source_id = _source_for(
+                            title,
+                            int(cohort) if cohort.isdigit() else 0,
+                            source_ids,
+                            source_by_title,
+                        )
+                    sections.append(
+                        (
+                            value["chunk_id"],
+                            source_id,
+                            value.get("article"),
+                            value["text"],
+                            _page(value.get("article")),
+                            int(bool(value.get("is_table"))),
+                            PARSER_VERSION,
+                            datetime.now(timezone.utc).isoformat(),
+                            0.8,
+                            "unverified",
+                        )
+                    )
+            connection.executemany(
+                "INSERT OR IGNORE INTO source_sections VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                sections,
+            )
         metadata = {
             "schema_version": SCHEMA_VERSION,
             "parser_version": PARSER_VERSION,
@@ -323,8 +425,12 @@ def build_database(
         report = {
             "program_count": connection.execute("SELECT count(*) FROM programs").fetchone()[0],
             "course_count": connection.execute("SELECT count(*) FROM courses").fetchone()[0],
-            "offering_count": connection.execute("SELECT count(*) FROM program_courses").fetchone()[0],
-            "requirement_count": connection.execute("SELECT count(*) FROM requirements").fetchone()[0],
+            "offering_count": connection.execute("SELECT count(*) FROM program_courses").fetchone()[
+                0
+            ],
+            "requirement_count": connection.execute("SELECT count(*) FROM requirements").fetchone()[
+                0
+            ],
             "chunk_count": connection.execute("SELECT count(*) FROM source_sections").fetchone()[0],
             **metadata,
         }
@@ -357,8 +463,12 @@ class AcademicRepository:
     def __init__(self, path: str | Path = DEFAULT_DATABASE) -> None:
         self.path = Path(path)
         if not self.path.is_file():
-            raise FileNotFoundError(f"academic database not found: {self.path}; run python -m scripts.build_all")
-        self._connection = sqlite3.connect(f"file:{self.path.resolve().as_posix()}?mode=ro", uri=True, check_same_thread=False)
+            raise FileNotFoundError(
+                f"academic database not found: {self.path}; run python -m scripts.build_all"
+            )
+        self._connection = sqlite3.connect(
+            f"file:{self.path.resolve().as_posix()}?mode=ro", uri=True, check_same_thread=False
+        )
         self._connection.row_factory = sqlite3.Row
         self._lock = RLock()
 
@@ -387,13 +497,23 @@ class AcademicRepository:
         return {row["key"]: row["value"] for row in self._all("SELECT key, value FROM metadata")}
 
     def options(self) -> dict[str, object]:
-        rows = self._all("SELECT cohort, canonical_name, college_id FROM programs ORDER BY cohort, canonical_name")
+        rows = self._all(
+            "SELECT cohort, canonical_name, college_id FROM programs ORDER BY cohort, canonical_name"
+        )
         values: dict[str, list[dict[str, str]]] = {}
         for row in rows:
-            values.setdefault(str(row["cohort"]), []).append({"id": row["canonical_name"], "name": row["canonical_name"], "college": row["college_id"]})
+            values.setdefault(str(row["cohort"]), []).append(
+                {
+                    "id": row["canonical_name"],
+                    "name": row["canonical_name"],
+                    "college": row["college_id"],
+                }
+            )
         return {"dataset": self.metadata(), "programs_by_cohort": values}
 
-    def _resolve(self, kind: str, mention: str, cohort: int | None, program_id: str | None = None) -> ResolvedEntity | None:
+    def _resolve(
+        self, kind: str, mention: str, cohort: int | None, program_id: str | None = None
+    ) -> ResolvedEntity | None:
         target = _normalized(mention)
         if not target:
             return None
@@ -422,35 +542,69 @@ class AcademicRepository:
         for row in rows:
             alias = str(row["alias"])
             if alias == target or alias in target or target in alias:
-                return ResolvedEntity(entity_type=kind, canonical_id=row["id"], canonical_name=row["name"], confidence=1.0 if alias == target else 0.85)
+                return ResolvedEntity(
+                    entity_type=kind,
+                    canonical_id=row["id"],
+                    canonical_name=row["name"],
+                    confidence=1.0 if alias == target else 0.85,
+                )
         return None
 
     def resolve_program(self, mention: str, cohort: int | None = None) -> ResolvedEntity | None:
-        direct = self._one("SELECT program_id, canonical_name FROM programs WHERE program_id=?", (mention,))
+        direct = self._one(
+            "SELECT program_id, canonical_name FROM programs WHERE program_id=?", (mention,)
+        )
         if direct:
-            return ResolvedEntity(entity_type="program", canonical_id=direct["program_id"], canonical_name=direct["canonical_name"], confidence=1.0)
+            return ResolvedEntity(
+                entity_type="program",
+                canonical_id=direct["program_id"],
+                canonical_name=direct["canonical_name"],
+                confidence=1.0,
+            )
         return self._resolve("program", mention, cohort)
 
-    def resolve_course(self, mention: str, cohort: int | None = None, program_id: str | None = None) -> ResolvedEntity | None:
+    def resolve_course(
+        self, mention: str, cohort: int | None = None, program_id: str | None = None
+    ) -> ResolvedEntity | None:
         return self._resolve("course", mention, cohort, program_id)
 
     def resolve_module(self, mention: str, program_id: str | None = None) -> ResolvedEntity | None:
         return self._resolve("module", mention, None, program_id)
 
     def programs_in_text(self, text: str, cohort: int | None = None) -> tuple[ResolvedEntity, ...]:
-        rows = self._all("SELECT DISTINCT alias FROM program_aliases" + (" a JOIN programs p ON p.program_id=a.program_id WHERE p.cohort=?" if cohort else ""), (cohort,) if cohort else ())
+        rows = self._all(
+            "SELECT DISTINCT alias FROM program_aliases"
+            + (
+                " a JOIN programs p ON p.program_id=a.program_id WHERE p.cohort=?" if cohort else ""
+            ),
+            (cohort,) if cohort else (),
+        )
         values: list[ResolvedEntity] = []
         for row in rows:
             resolved = self.resolve_program(str(row["alias"]), cohort)
-            if resolved and _normalized(str(row["alias"])) in _normalized(text) and resolved.canonical_id not in {item.canonical_id for item in values}:
+            if (
+                resolved
+                and _normalized(str(row["alias"])) in _normalized(text)
+                and resolved.canonical_id not in {item.canonical_id for item in values}
+            ):
                 values.append(resolved)
         return tuple(values)
 
     def list_courses(
-        self, *, cohort: int, program_id: str, semesters: tuple[int, ...] = (), natures: tuple[str, ...] = (), module_ids: tuple[str, ...] = (), course_ids: tuple[str, ...] = ()
+        self,
+        *,
+        cohort: int,
+        program_id: str | None = None,
+        semesters: tuple[int, ...] = (),
+        natures: tuple[str, ...] = (),
+        module_ids: tuple[str, ...] = (),
+        course_ids: tuple[str, ...] = (),
     ) -> tuple[CourseRecord, ...]:
-        clauses = ["p.cohort=?", "pc.program_id=?"]
-        params: list[object] = [cohort, program_id]
+        clauses = ["p.cohort=?"]
+        params: list[object] = [cohort]
+        if program_id is not None:
+            clauses.append("pc.program_id=?")
+            params.append(program_id)
         if semesters:
             placeholders = ",".join("?" for _ in semesters)
             clauses.append(f"CAST(substr(pc.semester, 1, 1) AS INTEGER) IN ({placeholders})")
@@ -459,7 +613,9 @@ class AcademicRepository:
             conditions = []
             for nature in natures:
                 if nature == "elective":
-                    conditions.append("(pc.course_nature LIKE '%选修%' OR m.canonical_name LIKE '%方向%')")
+                    conditions.append(
+                        "(pc.course_nature LIKE '%选修%' OR m.canonical_name LIKE '%方向%')"
+                    )
                 elif nature == "free_elective":
                     conditions.append("m.canonical_name LIKE '%自由选修%'")
                 else:
@@ -473,34 +629,48 @@ class AcademicRepository:
             placeholders = ",".join("?" for _ in course_ids)
             clauses.append(f"pc.course_id IN ({placeholders})")
             params.extend(course_ids)
-        rows = self._all(f"""
+        rows = self._all(
+            f"""
             SELECT pc.record_id, pc.course_id, c.canonical_code AS code, c.canonical_name AS name, pc.credits, pc.semester,
                    pc.course_nature AS nature, pc.module_id, m.canonical_name AS module_name, pc.department,
                    pc.source_id, pc.source_page, pc.chunk_id
             FROM program_courses pc JOIN programs p ON p.program_id=pc.program_id
             JOIN courses c ON c.course_id=pc.course_id JOIN modules m ON m.module_id=pc.module_id
-            WHERE {' AND '.join(clauses)}
+            WHERE {" AND ".join(clauses)}
             ORDER BY CAST(substr(pc.semester, 1, 1) AS INTEGER), m.canonical_name, c.canonical_code, c.canonical_name
-        """, params)
+        """,
+            params,
+        )
         return tuple(CourseRecord(**dict(row)) for row in rows)
 
-    def requirements(self, *, cohort: int, program_id: str, module_ids: tuple[str, ...] = ()) -> list[dict[str, object]]:
+    def requirements(
+        self, *, cohort: int, program_id: str, module_ids: tuple[str, ...] = ()
+    ) -> list[dict[str, object]]:
         clauses = ["p.cohort=?", "r.program_id=?"]
         params: list[object] = [cohort, program_id]
         if module_ids:
             placeholders = ",".join("?" for _ in module_ids)
             clauses.append(f"r.module_id IN ({placeholders})")
             params.extend(module_ids)
-        return [dict(row) for row in self._all(f"""
+        return [
+            dict(row)
+            for row in self._all(
+                f"""
             SELECT r.*, m.canonical_name AS module_name FROM requirements r JOIN programs p ON p.program_id=r.program_id
-            JOIN modules m ON m.module_id=r.module_id WHERE {' AND '.join(clauses)} ORDER BY m.canonical_name
-        """, params)]
+            JOIN modules m ON m.module_id=r.module_id WHERE {" AND ".join(clauses)} ORDER BY m.canonical_name
+        """,
+                params,
+            )
+        ]
 
     def source(self, chunk_id: str) -> dict[str, object] | None:
-        row = self._one("""
+        row = self._one(
+            """
             SELECT ss.*, s.title, s.page_url, s.file_url, s.source_sha256, s.effective_from, s.effective_to
             FROM source_sections ss JOIN sources s ON s.source_id=ss.source_id WHERE ss.chunk_id=?
-        """, (chunk_id,))
+        """,
+            (chunk_id,),
+        )
         return dict(row) if row else None
 
     @staticmethod
@@ -529,19 +699,11 @@ class AcademicRepository:
         value = str(text or "")
         numbers = tuple(
             sorted(
-                {
-                    f"{float(item):g}"
-                    for item in re.findall(r"(?<![A-Za-z])\d+(?:\.\d+)?", value)
-                }
+                {f"{float(item):g}" for item in re.findall(r"(?<![A-Za-z])\d+(?:\.\d+)?", value)}
             )
         )
         codes = tuple(
-            sorted(
-                {
-                    item.upper()
-                    for item in re.findall(r"\b[A-Z]{2,6}\d{2,4}\b", value, re.I)
-                }
-            )
+            sorted({item.upper() for item in re.findall(r"\b[A-Z]{2,6}\d{2,4}\b", value, re.I)})
         )
         return numbers, codes
 
@@ -579,7 +741,7 @@ class AcademicRepository:
                 left_signature = cls._policy_value_signature(left.get("text"))
                 if not any(left_signature):
                     continue
-                for right in sources[index + 1:]:
+                for right in sources[index + 1 :]:
                     right_signature = cls._policy_value_signature(right.get("text"))
                     if not any(right_signature) or left_signature == right_signature:
                         continue
@@ -603,7 +765,7 @@ class AcademicRepository:
         for run in runs:
             if re.fullmatch(r"[\u4e00-\u9fff]+", run):
                 for size in range(2, min(6, len(run) + 1)):
-                    terms.extend(run[index:index + size] for index in range(len(run) - size + 1))
+                    terms.extend(run[index : index + size] for index in range(len(run) - size + 1))
             elif len(run) > 1:
                 terms.append(run)
         effective_date = self._policy_as_of(as_of)
@@ -644,7 +806,14 @@ class AcademicRepository:
                      ss.physical_page
             LIMIT ?
             """,
-            [*params, effective_date, effective_date, effective_date, effective_date, max(limit * 12, 240)],
+            [
+                *params,
+                effective_date,
+                effective_date,
+                effective_date,
+                effective_date,
+                max(limit * 12, 240),
+            ],
         )
         candidates = [dict(row) for row in rows]
 
@@ -667,16 +836,40 @@ class AcademicRepository:
         return candidates[:limit]
 
     def compare_programs(self, *, cohort: int, program_ids: tuple[str, ...]) -> dict[str, object]:
-        groups: dict[str, list[CourseRecord]] = {program_id: list(self.list_courses(cohort=cohort, program_id=program_id)) for program_id in program_ids}
-        program_names = {row["program_id"]: row["canonical_name"] for row in self._all("SELECT program_id, canonical_name FROM programs WHERE program_id IN (" + ",".join("?" for _ in program_ids) + ")", program_ids)}
-        code_sets = {program_id: {course.code or course.name for course in values} for program_id, values in groups.items()}
-        intersection = set.intersection(*code_sets.values()) if code_sets else set()
-        only = {program_id: sorted(values - intersection) for program_id, values in code_sets.items()}
-        minimums = {
-            program_id: sum(float(row["required_credits"] or 0) for row in self.requirements(cohort=cohort, program_id=program_id))
+        groups: dict[str, list[CourseRecord]] = {
+            program_id: list(self.list_courses(cohort=cohort, program_id=program_id))
             for program_id in program_ids
         }
-        return {"programs": program_names, "intersection": sorted(intersection), "only_in_each": only, "numeric_difference": minimums}
+        program_names = {
+            row["program_id"]: row["canonical_name"]
+            for row in self._all(
+                "SELECT program_id, canonical_name FROM programs WHERE program_id IN ("
+                + ",".join("?" for _ in program_ids)
+                + ")",
+                program_ids,
+            )
+        }
+        code_sets = {
+            program_id: {course.code or course.name for course in values}
+            for program_id, values in groups.items()
+        }
+        intersection = set.intersection(*code_sets.values()) if code_sets else set()
+        only = {
+            program_id: sorted(values - intersection) for program_id, values in code_sets.items()
+        }
+        minimums = {
+            program_id: sum(
+                float(row["required_credits"] or 0)
+                for row in self.requirements(cohort=cohort, program_id=program_id)
+            )
+            for program_id in program_ids
+        }
+        return {
+            "programs": program_names,
+            "intersection": sorted(intersection),
+            "only_in_each": only,
+            "numeric_difference": minimums,
+        }
 
 
 __all__ = ["AcademicRepository", "CourseRecord", "DEFAULT_DATABASE", "build_database"]

@@ -179,7 +179,7 @@ def _parse_docx(path: Path) -> ParsedDocument:
         from docx.text.paragraph import Paragraph
     except ImportError as exc:
         raise RuntimeError(
-            "python-docx is required for DOCX parsing; install requirements-ingest.txt"
+            "python-docx is required for DOCX parsing; run uv sync --extra ingest"
         ) from exc
 
     document = Document(path)
@@ -242,7 +242,7 @@ def _parse_pdf(path: Path, ocr_provider: OCRProvider | None) -> ParsedDocument:
         import pdfplumber
     except ImportError as exc:
         raise RuntimeError(
-            "pdfplumber is required for PDF parsing; install requirements-ingest.txt"
+            "pdfplumber is required for PDF parsing; run uv sync --extra ingest"
         ) from exc
 
     page_texts: list[str] = []
