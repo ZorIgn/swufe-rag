@@ -1,4 +1,14 @@
 [
-  {"id": "dev-course-list", "intent": "course_query", "question_template": "{cohort}级{program}第{semester}学期有哪些选修课？"},
-  {"id": "dev-course-detail", "intent": "course_detail", "question_template": "{cohort}级{program}{course}是多少学分？"}
+  {
+    "id": "dev-course-list",
+    "intent": "course_query",
+    "question": "2024级测试专业X第1学期有哪些选修课？",
+    "expected_tools": ["list_courses"]
+  },
+  {
+    "id": "dev-course-detail",
+    "intent": "course_detail",
+    "question": "2024级测试专业X（TST101）是多少学分？",
+    "expected_tools": ["get_course_detail"]
+  }
 ]

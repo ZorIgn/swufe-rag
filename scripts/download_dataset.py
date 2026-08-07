@@ -31,7 +31,10 @@ def main() -> None:
         archive.unlink()
     missing = [name for name in REQUIRED if not (args.data_dir / name).is_file()]
     if missing:
-        raise SystemExit("dataset unavailable; configure --source-dir or SWUFE_DATASET_URL: " + ", ".join(missing))
+        raise SystemExit(
+            "dataset unavailable; configure --source-dir or SWUFE_DATASET_URL: "
+            + ", ".join(missing)
+        )
     print("dataset ready: " + str(args.data_dir.resolve()))
 
 

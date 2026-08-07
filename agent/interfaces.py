@@ -1,4 +1,4 @@
-"""Explicit dependency interfaces for :class:`agent.orchestrator.AgentRuntime`."""
+"""Explicit dependency interfaces for the canonical runtime."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ from contextlib import AbstractContextManager
 from typing import Protocol
 
 from evidence.models import EvidencePacket, FinalAnswer
+from query.context import RequestContext
 from query.schemas import ExecutionPlan, NormalizedQuery, UnderstandingDraft
 
 
@@ -14,7 +15,15 @@ class QuestionUnderstanding(Protocol):
 
 
 class QueryNormalizer(Protocol):
-    def __call__(self, draft: UnderstandingDraft, question: str, *, inherited_program_id: str | None = None, inherited_cohort: int | None = None) -> NormalizedQuery: ...
+    def __call__(
+        self,
+        draft: UnderstandingDraft,
+        question: str,
+        *,
+        context: RequestContext,
+        inherited_program_id: str | None = None,
+        inherited_cohort: int | None = None,
+    ) -> NormalizedQuery: ...
 
 
 class ExecutionPlanner(Protocol):
@@ -23,10 +32,6 @@ class ExecutionPlanner(Protocol):
 
 class ToolExecutor(Protocol):
     def execute(self, plan: ExecutionPlan) -> EvidencePacket: ...
-
-
-class Retriever(Protocol):
-    def retrieve(self, question: str) -> EvidencePacket: ...
 
 
 class AnswerSynthesizer(Protocol):
@@ -45,3 +50,5 @@ class SessionStore(Protocol):
 
 class Tracer(Protocol):
     def start(self, name: str, **attributes: object) -> AbstractContextManager[None]: ...
+
+    def increment(self, name: str, value: float = 1.0, **attributes: object) -> None: ...

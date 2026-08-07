@@ -9,9 +9,11 @@ from evidence.models import (
     ClaimValidation,
     DerivedFact,
     EvidencePacket,
+    EvidenceTrust,
     Fact,
     FinalAnswer,
 )
+from generation.claim_semantics import fact_signature, polarity_conflicts, text_signature
 
 NUMBER_RE = re.compile(r"(?<![A-Za-z])\d+(?:\.\d+)?")
 COURSE_CODE_RE = re.compile(r"\b[A-Z]{2,6}\d{2,4}\b", re.I)
@@ -93,6 +95,46 @@ def _citation_supports_claim(claim_text: str, evidence_id: str, packet: Evidence
     )
 
 
+def _untrusted_reachable_evidence(
+    packet: EvidencePacket, evidence_ids: set[str]
+) -> tuple[set[str], set[str]]:
+    """Return missing and non-verified evidence IDs in a fact support graph."""
+
+    missing: set[str] = set()
+    non_verified: set[str] = set()
+    for evidence_id in evidence_ids:
+        evidence = packet.evidence_by_id(evidence_id)
+        if evidence is None:
+            missing.add(evidence_id)
+        elif evidence.provenance.review_status is not EvidenceTrust.VERIFIED:
+            non_verified.add(evidence_id)
+    return missing, non_verified
+
+
+def _polarity_conflict_reasons(
+    claim_text: str,
+    facts: list[Fact | DerivedFact],
+    packet: EvidencePacket,
+    evidence_ids: set[str],
+) -> tuple[str, ...]:
+    """Compare directional policy meaning of a claim with its bound support."""
+
+    claim = text_signature(claim_text)
+    reasons: list[str] = []
+    for fact in facts:
+        for conflict in polarity_conflicts(
+            claim, fact_signature(fact.predicate, fact.subject, fact.value)
+        ):
+            reasons.append(f"claim_predicate_polarity_conflict:{conflict}")
+    for evidence_id in sorted(evidence_ids):
+        evidence = packet.evidence_by_id(evidence_id)
+        if evidence is None:
+            continue
+        for conflict in polarity_conflicts(claim, text_signature(evidence.quote)):
+            reasons.append(f"claim_evidence_polarity_conflict:{conflict}")
+    return tuple(dict.fromkeys(reasons))
+
+
 class ClaimValidator:
     """Validate claim-level fact and evidence bindings before rendering an answer."""
 
@@ -158,6 +200,14 @@ class ClaimValidator:
                     reasons.append("school_fact_without_evidence")
                 if not provided_evidence:
                     reasons.append("school_fact_missing_evidence_binding")
+                missing_evidence, non_verified_evidence = _untrusted_reachable_evidence(
+                    packet, valid_evidence
+                )
+                if missing_evidence:
+                    reasons.append("school_fact_evidence_record_missing")
+                if non_verified_evidence:
+                    reasons.append("school_fact_non_verified_evidence")
+                reasons.extend(_polarity_conflict_reasons(span.text, facts, packet, valid_evidence))
 
             numbers, codes = _allowed_strings(facts)
             mentioned_numbers = {f"{float(value):g}" for value in NUMBER_RE.findall(span.text)}

@@ -1,33 +1,33 @@
-"""Bounded, metadata-filtered lexical baseline for canonical policy retrieval.
+"""Bounded lexical retrieval utility used for offline diagnostics.
 
-Dense encoders and rerankers can be supplied by deployment code, but the public
-score model remains explicit and the scope cache cannot grow without bound.
+Production policy retrieval is composed through :class:`HybridPolicyRetriever`.
+This module intentionally remains a real BM25 implementation for callers that
+need an explicitly lexical baseline, rather than a character-count surrogate.
 """
 
 from __future__ import annotations
 
-import re
 from collections import OrderedDict
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 
-from retrieval.scoring import RetrievedCandidate, final_score, reciprocal_rank_fusion
-
-
-def _terms(query: str) -> tuple[str, ...]:
-    tokens = re.findall(r"[A-Za-z0-9]+|[\u4e00-\u9fff]{2,}", query)
-    return tuple(dict.fromkeys(token.lower() for token in tokens if len(token) > 1))
+from retrieval.lexical import BM25LexicalIndex
+from retrieval.scoring import RetrievedCandidate, presentation_score, reciprocal_rank_fusion
 
 
 @dataclass
 class BoundedScopeCache:
+    """Small LRU cache for metadata-filtered candidate identifiers."""
+
     max_entries: int = 128
     dataset_version: str = "unknown"
-    _values: OrderedDict[tuple[str, tuple[tuple[str, str], ...]], tuple[str, ...]] = field(default_factory=OrderedDict)
+    _values: OrderedDict[tuple[tuple[str, str], ...], tuple[str, ...]] = field(
+        default_factory=OrderedDict
+    )
     hits: int = 0
     misses: int = 0
 
-    def get(self, key: tuple[str, tuple[tuple[str, str], ...]], dataset_version: str) -> tuple[str, ...] | None:
+    def get(self, key: tuple[tuple[str, str], ...], dataset_version: str) -> tuple[str, ...] | None:
         if dataset_version != self.dataset_version:
             self._values.clear()
             self.dataset_version = dataset_version
@@ -39,44 +39,80 @@ class BoundedScopeCache:
         self.hits += 1
         return value
 
-    def put(self, key: tuple[str, tuple[tuple[str, str], ...]], value: tuple[str, ...]) -> None:
+    def put(self, key: tuple[tuple[str, str], ...], value: tuple[str, ...]) -> None:
         self._values[key] = value
         self._values.move_to_end(key)
         while len(self._values) > self.max_entries:
             self._values.popitem(last=False)
 
     def metrics(self) -> dict[str, int]:
-        return {"max_entries": self.max_entries, "entries": len(self._values), "hits": self.hits, "misses": self.misses, "memory_estimate_bytes": sum(sum(len(item) for item in value) for value in self._values.values())}
+        return {
+            "max_entries": self.max_entries,
+            "entries": len(self._values),
+            "hits": self.hits,
+            "misses": self.misses,
+        }
 
 
 class ScopedRetriever:
-    def __init__(self, documents: Iterable[dict[str, object]], *, dataset_version: str, scope_cache: BoundedScopeCache | None = None) -> None:
-        self._documents = {str(value["chunk_id"]): dict(value) for value in documents}
+    """Actual BM25 baseline with metadata filtering performed before ranking."""
+
+    def __init__(
+        self,
+        documents: Iterable[dict[str, object]],
+        *,
+        dataset_version: str,
+        scope_cache: BoundedScopeCache | None = None,
+    ) -> None:
+        self._documents = {str(item["chunk_id"]): dict(item) for item in documents}
         self._dataset_version = dataset_version
         self._cache = scope_cache or BoundedScopeCache(dataset_version=dataset_version)
+        self._lexical = BM25LexicalIndex(self._documents.values())
 
-    def retrieve(self, query: str, *, scope: dict[str, str] | None = None, limit: int = 8) -> tuple[RetrievedCandidate, ...]:
+    def retrieve(
+        self,
+        query: str,
+        *,
+        scope: dict[str, str] | None = None,
+        limit: int = 8,
+    ) -> tuple[RetrievedCandidate, ...]:
         requested_scope = tuple(sorted((scope or {}).items()))
-        key = (query, requested_scope)
-        candidate_ids = self._cache.get(key, self._dataset_version)
+        candidate_ids = self._cache.get(requested_scope, self._dataset_version)
         if candidate_ids is None:
-            candidate_ids = tuple(identifier for identifier, document in self._documents.items() if all(str(document.get(field, "")) == value for field, value in requested_scope))
-            self._cache.put(key, candidate_ids)
-        terms = _terms(query)
-        candidates: list[RetrievedCandidate] = []
-        for identifier in candidate_ids:
-            document = self._documents[identifier]
-            text = str(document.get("text", ""))
-            lexical = sum(text.lower().count(term) * len(term) for term in terms)
-            entity = sum(float(term in text.lower()) for term in terms)
-            base = RetrievedCandidate(chunk_id=identifier, text=text, metadata=document, bm25_score=float(lexical), exact_entity_score=entity, scope_score=1.0 if requested_scope else 0.5)
-            candidates.append(base)
-        lexical_order = [item.chunk_id for item in sorted(candidates, key=lambda item: item.bm25_score, reverse=True)]
-        rrf = reciprocal_rank_fusion([lexical_order])
-        ranked = [item.__class__(**{**item.__dict__, "rrf_score": rrf.get(item.chunk_id, 0.0)}) for item in candidates]
-        ranked = [item.__class__(**{**item.__dict__, "final_score": final_score(item)}) for item in ranked]
-        return tuple(sorted(ranked, key=lambda item: item.final_score, reverse=True)[:limit])
+            candidate_ids = tuple(
+                identifier
+                for identifier, document in self._documents.items()
+                if all(str(document.get(field, "")) == value for field, value in requested_scope)
+            )
+            self._cache.put(requested_scope, candidate_ids)
+        lexical = self._lexical.rank(query, candidate_ids, limit=max(1, limit))
+        rrf = reciprocal_rank_fusion([[item.chunk_id for item in lexical]])
+        return tuple(
+            item.model_copy(
+                update={
+                    "rrf_score": rrf[item.chunk_id],
+                    "fused_rank": item.lexical_rank,
+                    "scope_score": 1.0 if requested_scope else 0.5,
+                    "authority_score": min(
+                        1.0, float(item.metadata.get("authority_level") or 0) / 3.0
+                    ),
+                    "final_score": presentation_score(
+                        fused_rank=item.lexical_rank,
+                        total=max(1, len(lexical)),
+                        reranker_score=None,
+                        authority_score=min(
+                            1.0, float(item.metadata.get("authority_level") or 0) / 3.0
+                        ),
+                        scope_score=1.0 if requested_scope else 0.5,
+                    ),
+                }
+            )
+            for item in lexical
+        )
 
     @property
     def cache_metrics(self) -> dict[str, int]:
         return self._cache.metrics()
+
+
+__all__ = ["BoundedScopeCache", "ScopedRetriever"]

@@ -35,11 +35,13 @@ class InMemoryTTLSessionStore:
         return dict(value)
 
     def put(self, session_id: str, value: dict[str, object]) -> None:
-        safe = {key: item for key, item in value.items() if key not in {"api_key", "client", "provider"}}
+        safe = {
+            key: item for key, item in value.items() if key not in {"api_key", "client", "provider"}
+        }
         safe["dataset_version"] = self.dataset_version
         messages = safe.get("messages")
         if isinstance(messages, list):
-            safe["messages"] = messages[-self.max_messages:]
+            safe["messages"] = messages[-self.max_messages :]
         self._values[session_id] = (monotonic() + self.ttl_seconds, safe)
         self._purge()
 
@@ -58,6 +60,7 @@ class RedisSessionStore:
 
     def get(self, session_id: str) -> dict[str, object] | None:
         import json
+
         raw = self._client.get(f"academic-agent:{session_id}")
         if not raw:
             return None
@@ -66,6 +69,11 @@ class RedisSessionStore:
 
     def put(self, session_id: str, value: dict[str, object]) -> None:
         import json
-        safe = {key: item for key, item in value.items() if key not in {"api_key", "client", "provider"}}
+
+        safe = {
+            key: item for key, item in value.items() if key not in {"api_key", "client", "provider"}
+        }
         safe["dataset_version"] = self._dataset_version
-        self._client.setex(f"academic-agent:{session_id}", self._ttl_seconds, json.dumps(safe, ensure_ascii=False))
+        self._client.setex(
+            f"academic-agent:{session_id}", self._ttl_seconds, json.dumps(safe, ensure_ascii=False)
+        )

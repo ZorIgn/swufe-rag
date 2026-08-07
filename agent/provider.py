@@ -106,7 +106,15 @@ class RequestScopedModel:
                     raise ProviderError("provider returned a non-text completion")
                 self.breaker.record_success()
                 return content
-            except (HTTPError, URLError, TimeoutError, KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+            except (
+                HTTPError,
+                URLError,
+                TimeoutError,
+                KeyError,
+                IndexError,
+                TypeError,
+                json.JSONDecodeError,
+            ) as exc:
                 last_error = exc
         self.breaker.record_failure()
         # Never interpolate URL headers, response bodies, or exception strings:

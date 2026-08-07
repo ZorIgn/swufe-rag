@@ -19,8 +19,8 @@ def canonical_runtime(tmp_path: Path):
         writer.writerow({"file": "test.pdf", "doc_title": "测试培养方案", "level": "院级", "college": "测试学院", "cohort": "2024", "year": "2024", "status": "现行", "page_url": "https://example.test/plan.pdf#page=1", "file_url": "https://example.test/plan.pdf", "collected_at": "2026-01-01"})
     chunks = tmp_path / "chunks.jsonl"
     entries = [
-        {"chunk_id": "test-plan-1", "text": "测试专业X培养方案。测试专业X专业选修最低要求为 3 学分。", "doc_title": "测试培养方案", "article": "测试专业X / 原文件第1页", "cohort": "2024", "is_table": False, "page_url": "https://example.test/plan.pdf#page=1", "file_url": "https://example.test/plan.pdf"},
-        {"chunk_id": "test-plan-2", "text": "测试专业Y培养方案。测试专业Y专业选修最低要求为 4 学分。", "doc_title": "测试培养方案", "article": "测试专业Y / 原文件第2页", "cohort": "2024", "is_table": False, "page_url": "https://example.test/plan.pdf#page=2", "file_url": "https://example.test/plan.pdf"},
+        {"chunk_id": "test-plan-1", "text": "测试专业X培养方案。测试专业X专业选修最低要求为 3 学分。", "doc_title": "测试培养方案", "article": "测试专业X / 原文件第1页", "cohort": "2024", "is_table": False, "page_url": "https://example.test/plan.pdf#page=1", "file_url": "https://example.test/plan.pdf", "review_status": "verified"},
+        {"chunk_id": "test-plan-2", "text": "测试专业Y培养方案。测试专业Y专业选修最低要求为 4 学分。", "doc_title": "测试培养方案", "article": "测试专业Y / 原文件第2页", "cohort": "2024", "is_table": False, "page_url": "https://example.test/plan.pdf#page=2", "file_url": "https://example.test/plan.pdf", "review_status": "verified"},
     ]
     chunks.write_text("\n".join(json.dumps(value, ensure_ascii=False) for value in entries) + "\n", encoding="utf-8")
     catalog = tmp_path / "catalog.json"

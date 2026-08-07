@@ -1,4 +1,4 @@
-"""MCP-facing adapter generated from the same typed ToolRegistry as HTTP."""
+"""MCP-compatible typed adapter governed by the same PlanExecutor as HTTP."""
 
 from __future__ import annotations
 
@@ -9,19 +9,23 @@ from typing import Any, cast, get_type_hints
 
 from pydantic import BaseModel, TypeAdapter
 
+from agent.policies import RuntimePolicy
 from agent.registry import ToolRegistry
+from agent.tools import PlanExecutor
 from evidence.provenance import stable_id
 from query.schemas import (
     ALL_OPERATION_TYPES,
     AuditCompletedCoursesOperation,
     CheckCurriculumFeasibilityOperation,
     CompareProgramsOperation,
+    ExecutionPlan,
     GetCourseDetailOperation,
     GetGraduationRequirementsOperation,
     GetModuleRequirementsOperation,
     ListCoursesBeforeSemesterOperation,
     ListCoursesOperation,
     ListUnavoidableCoursesOperation,
+    NormalizedQuery,
     Operation,
     ResolveSourceOperation,
     RetrievePolicyOperation,
@@ -66,17 +70,25 @@ class MCPToolDefinition:
 
 
 class MCPAdapter:
-    """Expose typed schemas and execute only operations in the shared registry."""
+    """Validate MCP arguments, create a one-operation plan, and execute it."""
 
-    def __init__(self, registry: ToolRegistry) -> None:
-        self.registry = registry
-        registered_types = registry.operation_types()
-        if registered_types != ALL_OPERATION_TYPES:
+    def __init__(self, executor: PlanExecutor | ToolRegistry) -> None:
+        # Passing a runtime PlanExecutor is the production path. The registry
+        # fallback is useful for isolated callers and still routes through a
+        # newly constructed PlanExecutor rather than invoking a callback directly.
+        if isinstance(executor, PlanExecutor):
+            self.executor = executor
+        else:
+            self.executor = PlanExecutor(executor, RuntimePolicy())
+        self.registry = self.executor.registry
+        if self.registry.operation_types() != ALL_OPERATION_TYPES:
             raise ValueError("MCP registry does not cover the canonical operation set")
         self._names = {
-            definition.name: definition.operation_type for definition in registry.definitions()
+            definition.name: definition.operation_type for definition in self.registry.definitions()
         }
-        self._names.update({operation_type: operation_type for operation_type in registered_types})
+        self._names.update(
+            {operation_type: operation_type for operation_type in ALL_OPERATION_TYPES}
+        )
         self._names.update({name: operation_type for operation_type, name in _MCP_NAMES.items()})
 
     def list_tools(self) -> tuple[MCPToolDefinition, ...]:
@@ -98,13 +110,9 @@ class MCPAdapter:
         return tuple(tools)
 
     def schema_names(self) -> tuple[str, ...]:
-        """Return registry names for callers that use the HTTP tool identifiers."""
-
         return self.registry.tool_names()
 
     def call_tool(self, name: str, arguments: Mapping[str, object]) -> dict[str, object]:
-        """Validate a tool call into a typed operation and return its packet."""
-
         if not isinstance(arguments, Mapping):
             raise ValueError("MCP arguments must be an object")
         operation_type = self._names.get(name)
@@ -123,7 +131,17 @@ class MCPAdapter:
                 }
             ),
         )
-        packet = self.registry.for_operation(operation).execute(operation)
+        query = NormalizedQuery(
+            raw_question=f"MCP:{operation_type}",
+            intent="general",
+            information_scope="unknown",
+        )
+        plan = ExecutionPlan(
+            plan_id=stable_id("mcp-plan", operation.operation_id),
+            query=query,
+            operations=(operation,),
+        )
+        packet = self.executor.execute(plan)
         return packet.model_dump(mode="json")
 
 

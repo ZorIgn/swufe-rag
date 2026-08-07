@@ -24,6 +24,8 @@ Intent = Literal[
     "progress_audit",
     "policy",
     "compare_programs",
+    "course_planning",
+    "curriculum_feasibility",
     "general",
 ]
 
@@ -37,6 +39,8 @@ RequestedOutput = Literal[
     "graduation_requirements",
     "progress_audit",
     "comparison",
+    "course_plan",
+    "feasibility",
 ]
 InformationScope = Literal["curriculum", "actual_offerings", "policy", "unknown"]
 
@@ -51,6 +55,8 @@ class UnderstandingDraft(StrictModel):
         "progress_audit",
         "policy",
         "compare_programs",
+        "course_planning",
+        "curriculum_feasibility",
         "general",
     ]
     requested_outputs: tuple[RequestedOutput, ...] = ()
@@ -64,6 +70,17 @@ class UnderstandingDraft(StrictModel):
     course_natures: tuple[Literal["required", "elective", "free_elective"], ...] = ()
     completed_courses: tuple[str, ...] = ()
     information_scope: Literal["curriculum", "actual_offerings", "policy", "unknown"] = "unknown"
+    comparison_dimensions: tuple[
+        Literal[
+            "graduation_min_credits",
+            "module_requirements",
+            "course_sets",
+            "required_courses",
+            "practice_requirements",
+        ],
+        ...,
+    ] = ()
+    deadline_semester: int | None = Field(default=None, ge=1, le=8)
     parser: Literal["deterministic", "llm"] = "deterministic"
     failure_reason: (
         Literal["invalid_json", "schema_error", "missing_constraint", "conflict", "provider_error"]
@@ -86,12 +103,27 @@ class NormalizedQuery(StrictModel):
     cohort: int | None = Field(default=None, ge=2010, le=2100)
     program_ids: tuple[str, ...] = ()
     program_names: tuple[str, ...] = ()
+    college_ids: tuple[str, ...] = ()
+    policy_as_of: str | None = None
     course_ids: tuple[str, ...] = ()
     course_codes: tuple[str, ...] = ()
     module_ids: tuple[str, ...] = ()
     semesters: tuple[int, ...] = ()
     course_natures: tuple[Literal["required", "elective", "free_elective"], ...] = ()
-    completed_courses: tuple[str, ...] = ()
+    completed_course_ids: tuple[str, ...] = ()
+    unmatched_completed_courses: tuple[str, ...] = ()
+    ambiguous_completed_courses: tuple[str, ...] = ()
+    deadline_semester: int | None = Field(default=None, ge=1, le=8)
+    comparison_dimensions: tuple[
+        Literal[
+            "graduation_min_credits",
+            "module_requirements",
+            "course_sets",
+            "required_courses",
+            "practice_requirements",
+        ],
+        ...,
+    ] = ()
     information_scope: Literal["curriculum", "actual_offerings", "policy", "unknown"]
     missing_fields: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
@@ -155,8 +187,10 @@ class RetrievePolicyArgs(StrictModel):
     question: str = Field(min_length=1, max_length=4000)
     cohort: int | None = Field(default=None, ge=2010, le=2100)
     program_ids: tuple[str, ...] = ()
+    college_ids: tuple[str, ...] = ()
     as_of: str | None = None
     topics: tuple[str, ...] = ()
+    top_k: int = Field(default=8, ge=1, le=100)
 
 
 class CompareProgramsArgs(StrictModel):
@@ -218,19 +252,23 @@ class AuditCompletedCoursesOperation(OperationBase):
 
 class ListCoursesBeforeSemesterOperation(OperationBase):
     type: Literal["list_courses_before_semester"] = "list_courses_before_semester"
-    tool_name: Literal["academic.list_courses"] = "academic.list_courses"
+    tool_name: Literal["academic.list_courses_before_semester"] = (
+        "academic.list_courses_before_semester"
+    )
     args: ListCoursesBeforeSemesterArgs
 
 
 class ListUnavoidableCoursesOperation(OperationBase):
     type: Literal["list_unavoidable_courses"] = "list_unavoidable_courses"
-    tool_name: Literal["academic.list_courses"] = "academic.list_courses"
+    tool_name: Literal["academic.list_unavoidable_courses"] = "academic.list_unavoidable_courses"
     args: ListUnavoidableCoursesArgs
 
 
 class CheckCurriculumFeasibilityOperation(OperationBase):
     type: Literal["check_curriculum_feasibility"] = "check_curriculum_feasibility"
-    tool_name: Literal["academic.audit_progress"] = "academic.audit_progress"
+    tool_name: Literal["academic.check_curriculum_feasibility"] = (
+        "academic.check_curriculum_feasibility"
+    )
     args: CheckCurriculumFeasibilityArgs
 
 

@@ -20,11 +20,17 @@ jobs:
       - name: Install canonical development dependencies
         run: python -m pip install -e ".[dev]"
       - name: Lint
-        run: python -m ruff check agent academic app evidence generation ingest query retrieval storage scripts/build_all.py scripts/download_dataset.py scripts/verify_dataset.py eval/run_generalization.py eval/run_retrieval_ablation.py tests/canonical
+        run: >-
+          python -m ruff check
+          agent academic app evidence generation ingest query retrieval storage
+          scripts eval tests/canonical
       - name: Type check
         run: python -m mypy agent academic app evidence query generation retrieval storage
       - name: Compile canonical sources
-        run: python -m compileall -q agent academic app evidence generation ingest query retrieval storage scripts/build_all.py scripts/download_dataset.py scripts/verify_dataset.py eval/run_generalization.py eval/run_retrieval_ablation.py tests/canonical
+        run: >-
+          python -m compileall -q
+          agent academic app evidence generation ingest query retrieval storage
+          scripts eval tests/canonical
       - name: Build versioned CI data fixture
         run: >-
           python -m scripts.build_all
@@ -34,14 +40,38 @@ jobs:
           --chunks tests/canonical/data/chunks.jsonl
           --aliases tests/canonical/data/aliases.json
           --manifest-dir "$RUNNER_TEMP/manifests"
+          --retrieval-root "$RUNNER_TEMP/retrieval"
+          --retrieval-mode lexical
       - name: Verify CI data fixture
         run: python -m scripts.verify_dataset --database "$RUNNER_TEMP/academic.sqlite3"
+      - name: Planning smoke
+        run: python -m pytest -q tests/canonical/test_runtime.py -k three_operation_sql_rag_composite_plan
+      - name: BM25 lexical smoke
+        run: python -m pytest -q tests/canonical/test_runtime.py -k policy_retrieval_is_composed_from_registry
+      - name: Trust and claim gate smoke
+        run: >-
+          python -m pytest -q
+          tests/canonical/test_policy_conflicts_and_claims.py
+          tests/canonical/test_claim_semantics.py
+      - name: Dependency failure and timeout smoke
+        run: python -m pytest -q tests/canonical/test_plan_executor.py
+      - name: Offline agent evaluation regression
+        run: >-
+          python -m eval.run_agent_eval
+          --database "$RUNNER_TEMP/academic.sqlite3"
+          --questions eval/dev/queries.json
+          --output "$RUNNER_TEMP/agent-eval.json"
+      - name: Generalization smoke
+        run: python -m eval.run_generalization --database "$RUNNER_TEMP/academic.sqlite3" --samples 2
       - name: Unit and contract tests
         env:
           PYTHONUTF8: "1"
           HF_HUB_OFFLINE: "1"
           TRANSFORMERS_OFFLINE: "1"
-        run: python -m pytest -q tests/canonical --cov=agent --cov=academic --cov=query --cov=evidence --cov=generation --cov=app --cov-fail-under=50
+        run: >-
+          python -m pytest -q tests/canonical
+          --cov=agent --cov=academic --cov=query --cov=evidence
+          --cov=generation --cov=app --cov-fail-under=50
   docker:
     runs-on: ubuntu-latest
     steps:

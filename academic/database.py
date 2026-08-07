@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from hashlib import sha256
 from pathlib import Path
 from threading import RLock
+from typing import Literal, cast
 
 from evidence.provenance import PARSER_VERSION, stable_id
 from query.schemas import ResolvedEntity
@@ -31,6 +32,13 @@ DEFAULT_ALIAS_CONFIG = ROOT / "config" / "entity_aliases.json"
 
 
 SCHEMA_VERSION = "1"
+REVIEW_STATUSES = frozenset({"verified", "review_required", "unverified"})
+
+
+class DataIntegrityError(ValueError):
+    """Raised when released catalog data cannot be mapped unambiguously."""
+
+
 SCHEMA = """
 PRAGMA foreign_keys = ON;
 CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -152,15 +160,36 @@ def _source_rows(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(handle))
 
 
-def _source_index(
-    rows: Iterable[dict[str, str]],
-) -> tuple[dict[tuple[str, str], dict[str, str]], dict[str, dict[str, str]]]:
+def _source_scope(value: object) -> str:
+    """Return a source's explicit cohort scope."""
+
+    scope = str(value or "不限").strip()
+    return scope or "不限"
+
+
+def _review_status(value: object, *, default: str = "unverified") -> str:
+    status = str(value or default).strip()
+    if status not in REVIEW_STATUSES:
+        raise DataIntegrityError(
+            f"invalid review_status: {status!r}; expected one of {sorted(REVIEW_STATUSES)!r}"
+        )
+    return status
+
+
+def _source_index(rows: Iterable[dict[str, str]]) -> dict[tuple[str, str], dict[str, str]]:
     exact: dict[tuple[str, str], dict[str, str]] = {}
-    title_only: dict[str, dict[str, str]] = {}
     for row in rows:
-        exact[(row["doc_title"], row["cohort"])] = row
-        title_only.setdefault(row["doc_title"], row)
-    return exact, title_only
+        title = str(row.get("doc_title") or "").strip()
+        if not title:
+            raise DataIntegrityError("source registry contains an empty doc_title")
+        key = (title, _source_scope(row.get("cohort")))
+        if key in exact:
+            raise DataIntegrityError(
+                "source registry contains duplicate title/cohort scope: "
+                f"title={title!r}, cohort={key[1]!r}"
+            )
+        exact[key] = row
+    return exact
 
 
 def _materialize_sources(
@@ -169,9 +198,17 @@ def _materialize_sources(
     ids: dict[tuple[str, str], str] = {}
     values: list[tuple[object, ...]] = []
     for row in rows:
-        title, cohort, url = row["doc_title"], row["cohort"], row["file_url"]
+        title = str(row.get("doc_title") or "").strip()
+        cohort = _source_scope(row.get("cohort"))
+        url = str(row.get("file_url") or "")
+        key = (title, cohort)
+        if key in ids:
+            raise DataIntegrityError(
+                "source registry contains duplicate title/cohort scope: "
+                f"title={title!r}, cohort={cohort!r}"
+            )
         identifier = _source_id(title, cohort, url)
-        ids[(title, cohort)] = identifier
+        ids[key] = identifier
         local = root / "data" / row["file"]
         year = row.get("year") or row.get("cohort") or ""
         fallback_authority = 2 if row.get("level") == "校级" else 1
@@ -210,17 +247,26 @@ def _materialize_sources(
 
 def _source_for(
     title: str,
-    cohort: int,
+    cohort: int | str | None,
     source_ids: dict[tuple[str, str], str],
-    title_rows: dict[str, dict[str, str]],
 ) -> str:
-    found = source_ids.get((title, str(cohort)))
+    source_title = str(title).strip()
+    scope = _source_scope(cohort)
+    found = source_ids.get((source_title, scope))
     if found:
         return found
-    row = title_rows.get(title)
-    if row:
-        return source_ids[(row["doc_title"], row["cohort"])]
-    raise ValueError(f"catalog source is not registered: {title!r}, cohort={cohort}")
+    universal = source_ids.get((source_title, "不限"))
+    if universal:
+        return universal
+    available_scopes = sorted(
+        registered_scope
+        for registered_title, registered_scope in source_ids
+        if registered_title == source_title
+    )
+    raise DataIntegrityError(
+        "catalog/chunk source is not registered for its cohort or the universal scope: "
+        f"title={source_title!r}, cohort={scope!r}, available={available_scopes!r}"
+    )
 
 
 def build_database(
@@ -237,7 +283,7 @@ def build_database(
     )
     catalog = json.loads(catalog_file.read_text(encoding="utf-8"))
     source_rows = _source_rows(source_file)
-    source_by_title_cohort, source_by_title = _source_index(source_rows)
+    _source_index(source_rows)
     aliases = _read_aliases(Path(aliases_path))
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.with_suffix(target.suffix + ".tmp")
@@ -254,7 +300,7 @@ def build_database(
         requirement_rows: list[tuple[object, ...]] = []
         for plan in catalog.get("plans", []):
             cohort = int(plan["cohort"])
-            source_id = _source_for(plan["source_title"], cohort, source_ids, source_by_title)
+            source_id = _source_for(plan["source_title"], cohort, source_ids)
             program_id = _program_id(plan["major"], plan["college"], cohort)
             program_rows.append((program_id, plan["major"], plan["college"], cohort, source_id))
             values = {str(plan["major"]), str(plan["major"]).removesuffix("专业")}
@@ -317,32 +363,34 @@ def build_database(
         for course in catalog.get("courses", []):
             cohort = int(course["cohort"])
             program_id = _program_id(course["major"], course["college"], cohort)
-            module_id = module_map.get((program_id, course["module"]))
-            if module_id is None:
-                module_id = _module_id(program_id, course["module"])
-                module_map[(program_id, course["module"])] = module_id
+            course_module_id = module_map.get((program_id, course["module"]))
+            if course_module_id is None:
+                course_module_id = _module_id(program_id, course["module"])
+                module_map[(program_id, course["module"])] = course_module_id
                 connection.execute(
                     "INSERT OR IGNORE INTO modules VALUES (?, ?, ?)",
-                    (module_id, program_id, course["module"]),
+                    (course_module_id, program_id, course["module"]),
                 )
                 connection.execute(
                     "INSERT OR IGNORE INTO module_aliases VALUES (?, ?, ?)",
-                    (course["module"], _normalized(course["module"]), module_id),
+                    (course["module"], _normalized(course["module"]), course_module_id),
                 )
             code = str(course.get("code") or "").upper() or None
             name = str(course["name"])
             course_id = _course_id(code, name)
             course_rows.append((course_id, code, name))
             course_alias_rows.add((name, _normalized(name), course_id))
+            if code:
+                course_alias_rows.add((code, _normalized(code), course_id))
             for alias, target_name in aliases["course_aliases"].items():
                 if target_name == name:
                     course_alias_rows.add((alias, _normalized(alias), course_id))
             evidence = course.get("evidence") or {}
-            source_id = _source_for(course["source_title"], cohort, source_ids, source_by_title)
+            source_id = _source_for(course["source_title"], cohort, source_ids)
             record_id = stable_id(
                 "offering",
                 program_id,
-                module_id,
+                course_module_id,
                 course_id,
                 course.get("semester"),
                 course.get("page"),
@@ -352,7 +400,7 @@ def build_database(
                 (
                     record_id,
                     program_id,
-                    module_id,
+                    course_module_id,
                     course_id,
                     course.get("nature"),
                     _semester(course.get("semester")),
@@ -384,15 +432,10 @@ def build_database(
             with chunk_file.open(encoding="utf-8") as stream:
                 for line in stream:
                     value = json.loads(line)
-                    title, cohort = str(value["doc_title"]), str(value.get("cohort") or "不限")
-                    source_id = source_ids.get((title, cohort))
-                    if source_id is None:
-                        source_id = _source_for(
-                            title,
-                            int(cohort) if cohort.isdigit() else 0,
-                            source_ids,
-                            source_by_title,
-                        )
+                    title = str(value["doc_title"]).strip()
+                    chunk_cohort = _source_scope(value.get("cohort"))
+                    source_id = _source_for(title, chunk_cohort, source_ids)
+                    review_status = _review_status(value.get("review_status"))
                     sections.append(
                         (
                             value["chunk_id"],
@@ -404,7 +447,7 @@ def build_database(
                             PARSER_VERSION,
                             datetime.now(timezone.utc).isoformat(),
                             0.8,
-                            "unverified",
+                            review_status,
                         )
                     )
             connection.executemany(
@@ -491,7 +534,7 @@ class AcademicRepository:
 
     def _one(self, statement: str, values: Iterable[object] = ()) -> sqlite3.Row | None:
         with self._cursor() as cursor:
-            return cursor.execute(statement, tuple(values)).fetchone()
+            return cast(sqlite3.Row | None, cursor.execute(statement, tuple(values)).fetchone())
 
     def metadata(self) -> dict[str, str]:
         return {row["key"]: row["value"] for row in self._all("SELECT key, value FROM metadata")}
@@ -511,72 +554,213 @@ class AcademicRepository:
             )
         return {"dataset": self.metadata(), "programs_by_cohort": values}
 
-    def _resolve(
-        self, kind: str, mention: str, cohort: int | None, program_id: str | None = None
-    ) -> ResolvedEntity | None:
+    @staticmethod
+    def _matched_entities(
+        kind: Literal["program", "course", "module"], target: str, rows: list[sqlite3.Row]
+    ) -> tuple[ResolvedEntity, ...]:
+        exact = [row for row in rows if str(row["alias"]) == target]
+        matches = exact or [
+            row
+            for row in rows
+            if str(row["alias"]) and (str(row["alias"]) in target or target in str(row["alias"]))
+        ]
+        confidence = 1.0 if exact else 0.85
+        values: dict[str, ResolvedEntity] = {}
+        for row in matches:
+            identifier = str(row["id"])
+            values.setdefault(
+                identifier,
+                ResolvedEntity(
+                    entity_type=kind,
+                    canonical_id=identifier,
+                    canonical_name=str(row["name"]),
+                    confidence=confidence,
+                ),
+            )
+        return tuple(
+            sorted(values.values(), key=lambda item: (item.canonical_name, item.canonical_id))
+        )
+
+    def resolve_program_candidates(
+        self, mention: str, cohort: int | None = None
+    ) -> tuple[ResolvedEntity, ...]:
         target = _normalized(mention)
         if not target:
-            return None
-        if kind == "program":
-            statement = """
-                SELECT p.program_id AS id, p.canonical_name AS name, a.normalized_alias AS alias
-                FROM program_aliases a JOIN programs p ON p.program_id=a.program_id
-                WHERE (? IS NULL OR p.cohort=?) ORDER BY length(a.normalized_alias) DESC
+            return ()
+        rows = self._all(
             """
-            rows = self._all(statement, (cohort, cohort))
-        elif kind == "course":
-            statement = """
-                SELECT c.course_id AS id, c.canonical_name AS name, a.normalized_alias AS alias
-                FROM course_aliases a JOIN courses c ON c.course_id=a.course_id
-                WHERE ? IS NULL OR EXISTS (SELECT 1 FROM program_courses pc JOIN programs p ON p.program_id=pc.program_id WHERE pc.course_id=c.course_id AND p.cohort=? AND (? IS NULL OR p.program_id=?))
-                ORDER BY length(a.normalized_alias) DESC
-            """
-            rows = self._all(statement, (cohort, cohort, program_id, program_id))
-        else:
-            statement = """
-                SELECT m.module_id AS id, m.canonical_name AS name, a.normalized_alias AS alias
-                FROM module_aliases a JOIN modules m ON m.module_id=a.module_id
-                WHERE ? IS NULL OR m.program_id=? ORDER BY length(a.normalized_alias) DESC
-            """
-            rows = self._all(statement, (program_id, program_id))
-        for row in rows:
-            alias = str(row["alias"])
-            if alias == target or alias in target or target in alias:
-                return ResolvedEntity(
-                    entity_type=kind,
-                    canonical_id=row["id"],
-                    canonical_name=row["name"],
-                    confidence=1.0 if alias == target else 0.85,
-                )
-        return None
+            SELECT p.program_id AS id, p.canonical_name AS name, a.normalized_alias AS alias
+            FROM program_aliases a JOIN programs p ON p.program_id=a.program_id
+            WHERE (? IS NULL OR p.cohort=?)
+            """,
+            (cohort, cohort),
+        )
+        return self._matched_entities("program", target, rows)
 
     def resolve_program(self, mention: str, cohort: int | None = None) -> ResolvedEntity | None:
         direct = self._one(
-            "SELECT program_id, canonical_name FROM programs WHERE program_id=?", (mention,)
+            "SELECT program_id, canonical_name FROM programs WHERE program_id=? AND (? IS NULL OR cohort=?)",
+            (mention, cohort, cohort),
         )
         if direct:
             return ResolvedEntity(
                 entity_type="program",
-                canonical_id=direct["program_id"],
-                canonical_name=direct["canonical_name"],
+                canonical_id=str(direct["program_id"]),
+                canonical_name=str(direct["canonical_name"]),
                 confidence=1.0,
             )
-        return self._resolve("program", mention, cohort)
+        candidates = self.resolve_program_candidates(mention, cohort)
+        return candidates[0] if len(candidates) == 1 else None
+
+    def resolve_course_candidates(
+        self, mention: str, cohort: int | None = None, program_id: str | None = None
+    ) -> tuple[ResolvedEntity, ...]:
+        target = _normalized(mention)
+        if not target:
+            return ()
+        rows = self._all(
+            """
+            SELECT DISTINCT c.course_id AS id, c.canonical_name AS name, a.normalized_alias AS alias
+            FROM course_aliases a
+            JOIN courses c ON c.course_id=a.course_id
+            JOIN program_courses pc ON pc.course_id=c.course_id
+            JOIN programs p ON p.program_id=pc.program_id
+            WHERE (? IS NULL OR p.cohort=?)
+              AND (? IS NULL OR pc.program_id=?)
+            """,
+            (cohort, cohort, program_id, program_id),
+        )
+        return self._matched_entities("course", target, rows)
 
     def resolve_course(
         self, mention: str, cohort: int | None = None, program_id: str | None = None
     ) -> ResolvedEntity | None:
-        return self._resolve("course", mention, cohort, program_id)
+        candidates = self.resolve_course_candidates(mention, cohort, program_id)
+        return candidates[0] if len(candidates) == 1 else None
+
+    def resolve_module_candidates(
+        self, mention: str, program_id: str | None = None
+    ) -> tuple[ResolvedEntity, ...]:
+        target = _normalized(mention)
+        if not target:
+            return ()
+        rows = self._all(
+            """
+            SELECT DISTINCT m.module_id AS id, m.canonical_name AS name, a.normalized_alias AS alias
+            FROM module_aliases a JOIN modules m ON m.module_id=a.module_id
+            WHERE (? IS NULL OR m.program_id=?)
+            """,
+            (program_id, program_id),
+        )
+        return self._matched_entities("module", target, rows)
 
     def resolve_module(self, mention: str, program_id: str | None = None) -> ResolvedEntity | None:
-        return self._resolve("module", mention, None, program_id)
+        candidates = self.resolve_module_candidates(mention, program_id)
+        return candidates[0] if len(candidates) == 1 else None
+
+    def course_mentions_in_text(
+        self, text: str, cohort: int | None = None, program_id: str | None = None
+    ) -> tuple[tuple[str, tuple[ResolvedEntity, ...]], ...]:
+        """Return every in-text course alias with its scoped candidate set.
+
+        Unlike ``courses_in_text``, this preserves ambiguity so the normalizer
+        can request a clarification instead of silently dropping a course name.
+        """
+
+        normalized_text = _normalized(text)
+        if not normalized_text:
+            return ()
+        rows = self._all(
+            """
+            SELECT DISTINCT a.normalized_alias AS alias
+            FROM course_aliases a
+            JOIN program_courses pc ON pc.course_id=a.course_id
+            JOIN programs p ON p.program_id=pc.program_id
+            WHERE (? IS NULL OR p.cohort=?)
+              AND (? IS NULL OR pc.program_id=?)
+            """,
+            (cohort, cohort, program_id, program_id),
+        )
+        values: list[tuple[int, str, tuple[ResolvedEntity, ...]]] = []
+        for alias in {str(row["alias"]) for row in rows if len(str(row["alias"])) >= 2}:
+            position = normalized_text.find(alias)
+            if position < 0:
+                continue
+            candidates = self.resolve_course_candidates(alias, cohort, program_id)
+            if candidates:
+                values.append((position, alias, candidates))
+        return tuple(
+            (alias, candidates)
+            for _position, alias, candidates in sorted(
+                values, key=lambda item: (item[0], -len(item[1]), item[1])
+            )
+        )
+
+    def courses_in_text(
+        self, text: str, cohort: int | None = None, program_id: str | None = None
+    ) -> tuple[ResolvedEntity, ...]:
+        normalized_text = _normalized(text)
+        if not normalized_text:
+            return ()
+        rows = self._all(
+            """
+            SELECT DISTINCT a.normalized_alias AS alias
+            FROM course_aliases a
+            JOIN program_courses pc ON pc.course_id=a.course_id
+            JOIN programs p ON p.program_id=pc.program_id
+            WHERE (? IS NULL OR p.cohort=?)
+              AND (? IS NULL OR pc.program_id=?)
+            """,
+            (cohort, cohort, program_id, program_id),
+        )
+        matches: list[tuple[int, int, ResolvedEntity]] = []
+        for alias in {str(row["alias"]) for row in rows if len(str(row["alias"])) >= 2}:
+            position = normalized_text.find(alias)
+            if position < 0:
+                continue
+            candidates = self.resolve_course_candidates(alias, cohort, program_id)
+            if len(candidates) == 1:
+                matches.append((position, -len(alias), candidates[0]))
+        values: dict[str, ResolvedEntity] = {}
+        for _position, _length, value in sorted(
+            matches, key=lambda item: (item[0], item[1], item[2].canonical_id)
+        ):
+            values.setdefault(value.canonical_id, value)
+        return tuple(values.values())
+
+    def modules_in_text(
+        self, text: str, program_id: str | None = None
+    ) -> tuple[ResolvedEntity, ...]:
+        normalized_text = _normalized(text)
+        if not normalized_text:
+            return ()
+        rows = self._all(
+            """
+            SELECT DISTINCT a.normalized_alias AS alias
+            FROM module_aliases a JOIN modules m ON m.module_id=a.module_id
+            WHERE (? IS NULL OR m.program_id=?)
+            """,
+            (program_id, program_id),
+        )
+        matches: list[tuple[int, int, ResolvedEntity]] = []
+        for alias in {str(row["alias"]) for row in rows if len(str(row["alias"])) >= 2}:
+            position = normalized_text.find(alias)
+            if position < 0:
+                continue
+            candidates = self.resolve_module_candidates(alias, program_id)
+            if len(candidates) == 1:
+                matches.append((position, -len(alias), candidates[0]))
+        values: dict[str, ResolvedEntity] = {}
+        for _position, _length, value in sorted(
+            matches, key=lambda item: (item[0], item[1], item[2].canonical_id)
+        ):
+            values.setdefault(value.canonical_id, value)
+        return tuple(values.values())
 
     def programs_in_text(self, text: str, cohort: int | None = None) -> tuple[ResolvedEntity, ...]:
         rows = self._all(
-            "SELECT DISTINCT alias FROM program_aliases"
-            + (
-                " a JOIN programs p ON p.program_id=a.program_id WHERE p.cohort=?" if cohort else ""
-            ),
+            "SELECT DISTINCT a.alias FROM program_aliases a"
+            + (" JOIN programs p ON p.program_id=a.program_id WHERE p.cohort=?" if cohort else ""),
             (cohort,) if cohort else (),
         )
         values: list[ResolvedEntity] = []
@@ -666,12 +850,170 @@ class AcademicRepository:
     def source(self, chunk_id: str) -> dict[str, object] | None:
         row = self._one(
             """
-            SELECT ss.*, s.title, s.page_url, s.file_url, s.source_sha256, s.effective_from, s.effective_to
+            SELECT ss.*, s.title, s.page_url, s.file_url, s.source_sha256, s.effective_from, s.effective_to, s.authority_level, s.status, s.cohort, s.college_id
             FROM source_sections ss JOIN sources s ON s.source_id=ss.source_id WHERE ss.chunk_id=?
         """,
             (chunk_id,),
         )
         return dict(row) if row else None
+
+    def college_ids_for_programs(self, program_ids: tuple[str, ...]) -> tuple[str, ...]:
+        """Return the deterministic college scope represented by program ids."""
+
+        if not program_ids:
+            return ()
+        placeholders = ",".join("?" for _ in program_ids)
+        rows = self._all(
+            f"SELECT program_id, college_id FROM programs WHERE program_id IN ({placeholders})",
+            program_ids,
+        )
+        college_by_program = {str(row["program_id"]): str(row["college_id"]) for row in rows}
+        return tuple(
+            dict.fromkeys(
+                college_by_program[program_id]
+                for program_id in program_ids
+                if program_id in college_by_program
+            )
+        )
+
+    def program_ids_for_colleges(
+        self, college_ids: tuple[str, ...], cohort: int | None = None
+    ) -> tuple[str, ...]:
+        """Return programs in requested colleges, optionally constrained to a cohort."""
+
+        if not college_ids:
+            return ()
+        placeholders = ",".join("?" for _ in college_ids)
+        clauses = [f"college_id IN ({placeholders})"]
+        values: list[object] = list(college_ids)
+        if cohort is not None:
+            clauses.append("cohort=?")
+            values.append(cohort)
+        rows = self._all(
+            "SELECT program_id FROM programs WHERE "
+            + " AND ".join(clauses)
+            + " ORDER BY program_id",
+            values,
+        )
+        return tuple(str(row["program_id"]) for row in rows)
+
+    def retrieval_documents(self) -> tuple[dict[str, object], ...]:
+        """Expose source sections with all metadata required by policy retrieval.
+
+        The provider is database-backed and data-driven: a section is associated
+        with program ids only when its source is the authoritative source for
+        one or more catalog programs.  School-wide documents intentionally omit
+        ``program_ids`` rather than inheriting a guessed program scope.
+        """
+
+        rows = self._all(
+            """
+            SELECT ss.chunk_id, ss.text, ss.source_id, ss.article, ss.physical_page, ss.parser_version, ss.extracted_at, ss.confidence,
+                   ss.review_status, s.title, s.page_url, s.file_url, s.college_id,
+                   s.cohort, s.authority_level, s.effective_from, s.effective_to,
+                   s.status, s.supersedes_source_id, s.source_sha256
+            FROM source_sections ss JOIN sources s ON s.source_id=ss.source_id
+            ORDER BY ss.chunk_id
+            """
+        )
+        program_rows = self._all(
+            "SELECT source_id, program_id FROM programs ORDER BY source_id, program_id"
+        )
+        grouped: dict[str, list[str]] = {}
+        for program_row in program_rows:
+            grouped.setdefault(str(program_row["source_id"]), []).append(
+                str(program_row["program_id"])
+            )
+        programs_by_source = {source_id: tuple(values) for source_id, values in grouped.items()}
+        documents: list[dict[str, object]] = []
+        for row in rows:
+            document: dict[str, object] = {
+                "chunk_id": str(row["chunk_id"]),
+                "text": str(row["text"]),
+                "source_id": str(row["source_id"]),
+                "title": str(row["title"]),
+                "article": str(row["article"] or ""),
+                "physical_page": row["physical_page"],
+                "page_url": str(row["page_url"] or "") or None,
+                "file_url": str(row["file_url"] or "") or None,
+                "review_status": str(row["review_status"]),
+                "college_id": str(row["college_id"] or ""),
+                "cohort": str(row["cohort"]),
+                "authority_level": int(row["authority_level"]),
+                "effective_from": str(row["effective_from"] or "") or None,
+                "effective_to": str(row["effective_to"] or "") or None,
+                "status": str(row["status"]),
+                "supersedes_source_id": str(row["supersedes_source_id"] or "") or None,
+                "source_sha256": str(row["source_sha256"] or "") or None,
+                "parser_version": str(row["parser_version"]),
+                "extracted_at": str(row["extracted_at"]),
+                "confidence": float(row["confidence"]),
+            }
+            program_ids = programs_by_source.get(str(row["source_id"]), ())
+            if program_ids:
+                document["program_ids"] = program_ids
+            documents.append(document)
+        return tuple(documents)
+
+    @staticmethod
+    def _effective_boundary(value: object, *, end: bool) -> str | None:
+        normalized = str(value or "").strip()
+        if not normalized:
+            return None
+        if re.fullmatch(r"\d{4}", normalized):
+            return f"{normalized}-12-31" if end else f"{normalized}-01-01"
+        return normalized
+
+    def scoped_policy_documents(
+        self,
+        *,
+        cohort: int | None = None,
+        program_ids: tuple[str, ...] = (),
+        college_ids: tuple[str, ...] = (),
+        as_of: str | None = None,
+    ) -> tuple[dict[str, object], ...]:
+        """Filter retrieval documents by explicit cohort, program and college scope."""
+
+        effective_date = self._policy_as_of(as_of)
+        requested_programs = set(program_ids)
+        requested_colleges = set(college_ids)
+        requested_colleges.update(self.college_ids_for_programs(program_ids))
+        scoped: list[dict[str, object]] = []
+        for document in self.retrieval_documents():
+            document_cohort = str(document["cohort"])
+            if cohort is not None and document_cohort not in {"不限", str(cohort)}:
+                continue
+            if as_of is None and str(document["status"]) != "现行":
+                continue
+            effective_from = self._effective_boundary(document.get("effective_from"), end=False)
+            effective_to = self._effective_boundary(document.get("effective_to"), end=True)
+            if effective_from is not None and effective_from > effective_date:
+                continue
+            if effective_to is not None and effective_to < effective_date:
+                continue
+            document_college = str(document.get("college_id") or "")
+            if requested_colleges and document_college not in {
+                "",
+                "全校",
+                "校级",
+                *requested_colleges,
+            }:
+                continue
+            raw_program_ids = document.get("program_ids", ())
+            document_programs = (
+                set(raw_program_ids)
+                if isinstance(raw_program_ids, tuple)
+                and all(isinstance(program_id, str) for program_id in raw_program_ids)
+                else set()
+            )
+            if (
+                requested_programs
+                and document_programs
+                and not document_programs.intersection(requested_programs)
+            ):
+                continue
+            scoped.append(document)
+        return tuple(scoped)
 
     @staticmethod
     def _policy_as_of(as_of: str | None) -> str:
@@ -722,7 +1064,7 @@ class AcademicRepository:
             if not scope_key:
                 continue
             key = (
-                int(row["authority_level"]),
+                int(str(row["authority_level"])),
                 str(row.get("college_id") or ""),
                 str(row.get("cohort") or ""),
                 scope_key,
@@ -835,13 +1177,22 @@ class AcademicRepository:
         )
         return candidates[:limit]
 
-    def compare_programs(self, *, cohort: int, program_ids: tuple[str, ...]) -> dict[str, object]:
-        groups: dict[str, list[CourseRecord]] = {
-            program_id: list(self.list_courses(cohort=cohort, program_id=program_id))
-            for program_id in program_ids
-        }
+    def compare_programs(
+        self,
+        *,
+        cohort: int,
+        program_ids: tuple[str, ...],
+        dimensions: tuple[str, ...] = (
+            "graduation_min_credits",
+            "module_requirements",
+            "course_sets",
+        ),
+    ) -> dict[str, object]:
+        """Compute only the comparison dimensions requested by the typed plan."""
+
+        requested = set(dimensions)
         program_names = {
-            row["program_id"]: row["canonical_name"]
+            str(row["program_id"]): str(row["canonical_name"])
             for row in self._all(
                 "SELECT program_id, canonical_name FROM programs WHERE program_id IN ("
                 + ",".join("?" for _ in program_ids)
@@ -849,27 +1200,70 @@ class AcademicRepository:
                 program_ids,
             )
         }
-        code_sets = {
-            program_id: {course.code or course.name for course in values}
-            for program_id, values in groups.items()
-        }
-        intersection = set.intersection(*code_sets.values()) if code_sets else set()
-        only = {
-            program_id: sorted(values - intersection) for program_id, values in code_sets.items()
-        }
-        minimums = {
-            program_id: sum(
-                float(row["required_credits"] or 0)
-                for row in self.requirements(cohort=cohort, program_id=program_id)
+        result: dict[str, object] = {"programs": program_names}
+        needs_courses = bool(
+            requested.intersection({"course_sets", "required_courses", "practice_requirements"})
+        )
+        groups: dict[str, list[CourseRecord]] = {}
+        if needs_courses:
+            groups = {
+                program_id: list(self.list_courses(cohort=cohort, program_id=program_id))
+                for program_id in program_ids
+            }
+        if "course_sets" in requested:
+            code_sets = {
+                program_id: {course.code or course.name for course in values}
+                for program_id, values in groups.items()
+            }
+            intersection = set.intersection(*code_sets.values()) if code_sets else set()
+            result["intersection"] = sorted(intersection)
+            result["only_in_each"] = {
+                program_id: sorted(values - intersection)
+                for program_id, values in code_sets.items()
+            }
+        if "required_courses" in requested:
+            result["required_course_difference"] = sorted(
+                {
+                    course.code or course.name
+                    for values in groups.values()
+                    for course in values
+                    if "必修" in (course.nature or "")
+                }
             )
-            for program_id in program_ids
-        }
-        return {
-            "programs": program_names,
-            "intersection": sorted(intersection),
-            "only_in_each": only,
-            "numeric_difference": minimums,
-        }
+        if "practice_requirements" in requested:
+            result["practice_requirements"] = sorted(
+                {
+                    course.name
+                    for values in groups.values()
+                    for course in values
+                    if "实践" in (course.nature or "") or "实践" in course.module_name
+                }
+            )
+        if "module_requirements" in requested or "graduation_min_credits" in requested:
+            module_values: dict[str, list[dict[str, object]]] = {}
+            for program_id in program_ids:
+                module_values[program_id] = self.requirements(cohort=cohort, program_id=program_id)
+            result["module_requirements"] = module_values
+            # A catalog-level total is only canonical when an explicit rule row
+            # states it. Sums are exposed separately and never mislabeled.
+            explicit_totals: dict[str, float] = {}
+            for program_id, rows in module_values.items():
+                for row in rows:
+                    rule_text = str(row.get("rule_text") or "")
+                    if any(token in rule_text for token in ("毕业最低", "毕业总", "总学分")):
+                        value = row.get("required_credits")
+                        if value is not None:
+                            explicit_totals[program_id] = float(str(value))
+                            break
+            if explicit_totals:
+                result["graduation_min_credits"] = explicit_totals
+        return result
 
 
-__all__ = ["AcademicRepository", "CourseRecord", "DEFAULT_DATABASE", "build_database"]
+__all__ = [
+    "AcademicRepository",
+    "CourseRecord",
+    "DataIntegrityError",
+    "DEFAULT_DATABASE",
+    "build_database",
+]

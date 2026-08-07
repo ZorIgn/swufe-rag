@@ -1,125 +1,85 @@
 # Final Engineering Report — SWUFE Academic Agent
 
 **Report date:** 2026-08-07
-**Scope:** canonical source tree and the local verification runs recorded below. Generated
-course data, SQLite databases, indexes, models, and reports are intentionally not committed.
 
-## Repository shape
+## Scope and architecture
 
-The tracked source tree has one production HTTP service (`app.server`) and one
-bounded runtime (`agent.orchestrator.AgentRuntime`). Historical runtime chains,
-versioned servers, compatibility wrappers, handoff material, prior evaluation
-outputs, and generated data packages are removed from the tracked tree. The
-remaining implementation is organised as follows:
+The repository exposes one FastAPI service and one bounded academic-agent
+runtime. The canonical request path is:
 
-| Area | Role |
-|---|---|
-| `academic/` | SQLite projection, entity aliases, typed academic and policy tools |
-| `query/` | Structured understanding, normalization, and typed plan construction |
-| `agent/` | Explicit dependency composition, bounded state machine, sessions, tracing, registry, and MCP adapter |
-| `evidence/` | Facts, derived facts, provenance, coverage, conflicts, and claim spans |
-| `generation/` | Constrained synthesis, rendering, and claim/citation validation |
-| `ingest/` | Source contracts, document parsing, and chunking |
-| `app/server/` | FastAPI HTTP surface and health/readiness lifecycle |
-| `scripts/` | Dataset download, SQLite build, and integrity verification |
+\`\`\`text
+RawQuestion → UnderstandingDraft → NormalizedQuery → ExecutionPlan
+            → typed read-only tools → EvidencePacket → ClaimValidation
+            → rendered answer with provenance
+\`\`\`
 
-The request path is:
+Structured curriculum facts are read from SQLite. Policy explanations use the
+scoped retrieval service. The runtime passes cohort, college, program, and
+effective-date scope explicitly; it does not append scope text to the user's
+question. Tool operations use typed arguments, dependency-aware execution, a
+single plan deadline, and deterministic failure results. School facts are
+bound to facts and evidence before an answer is rendered. Equal-authority
+policy conflicts and untrusted evidence fail closed.
 
-```text
-Raw question → UnderstandingDraft → NormalizedQuery → typed execution plan
-             → read-only ToolRegistry → EvidencePacket → validated claims
-             → rendered answer with source-page citations
-```
-
-No model-generated SQL or arbitrary Python execution is accepted. Validation
-can trigger at most one targeted policy retrieval; it cannot enter an unbounded
-reflection loop.
-
-## Tool and evidence model
-
-`ExecutionPlan.operations` is a discriminated union of typed operations. The
-registry checks that the complete planner operation set is also executable.
-Independent read-only operations can run in parallel. A mixed question can plan
-`get_module_requirements`, `list_courses`, and `retrieve_policy` together.
-
-The shared MCP adapter exposes schemas generated from those same operation
-models. Its standard names include `search_policy`, `list_courses`,
-`get_course_detail`, `get_graduation_requirements`, `audit_academic_progress`,
-`compare_programs`, and `resolve_source`; it validates inputs before invoking
-the same registry used by HTTP.
-
-School claims carry `fact_ids` and `evidence_ids`. Numeric and course-code
-references are checked against the claim's facts, derived facts retain their
-input graph, and citations must be reachable from that graph and have lexical
-support for the claim. Equal-authority source conflicts result in a refusal
-rather than an automatic choice.
+The MCP adapter and HTTP runtime share the same registry, schemas, executor,
+tracing, and validation path.
 
 ## Data and reproducibility
 
-`python -m scripts.build_all` creates SQLite and an immutable manifest under
-`artifacts/manifests/`; `python -m scripts.verify_dataset` checks duplicate
-sources, orphan relations/provenance, course codes, credits, semesters,
-program relations, duplicate canonical offerings, and requirement evidence.
-Raw and generated data remain ignored by Git.
+\`python -m scripts.build_all\` creates the SQLite projection, a retrieval
+manifest, and a dataset manifest. \`python -m scripts.verify_dataset\` checks
+source, relation, course, provenance, and evidence integrity. Generated
+databases, indexes, and raw releases remain outside Git.
 
-The final local CI fixture build produced:
+The fresh canonical fixture run on 2026-08-07 reported:
 
-| Manifest field | Value |
-|---|---:|
+| Field | Value |
+| --- | ---: |
 | Sources | 1 |
 | Physical pages | 2 |
 | Programs | 2 |
 | Course offerings | 2 |
 | Requirements | 2 |
 | Knowledge chunks | 2 |
-| Dataset version | `canonical-ci-fixture-1-07c179ff3a11` |
+| Dataset version | \`canonical-ci-fixture-1\` |
 
-These are fixture measurements, not claims about the externally distributed
-production dataset.
+## Local verification
 
-## Executed verification
+| Check | Observed result |
+| --- | --- |
+| \`python -m pytest -q\` | 32 passed |
+| Ruff over production, evaluation, and canonical-test paths | passed |
+| \`python -m compileall -q ...\` | passed |
+| Fixture build and \`verify_dataset\` | all integrity counters 0 |
+| Fixture generalization smoke | 2/2 passed |
+| Fixture agent evaluation | 2 questions; intent, plan, tool precision, and tool recall all 1.0 |
 
-| Check | Local result |
-|---|---|
-| Ruff | Passed for the CI source/test set. |
-| Mypy | Passed for 39 production source files. |
-| Compile check | Passed for canonical packages, scripts, eval runners, and tests. |
-| Fixture build + verification | Passed with every reported integrity count at zero. |
-| Canonical tests + coverage gate | Passed: 19 tests, 81.98% total coverage, with the configured 50% gate satisfied. |
-| Data-driven generalization | Passed 2/2 fixture programs without program-specific business code. |
-| Retrieval ablation smoke | Ran on a two-query fixture: lexical Recall@1 0.500, Recall@5/10 1.000, MRR 0.750, nDCG@10 0.815. Dense/reranker variants were explicitly reported unavailable rather than fabricated. |
-| Docker build/import | Image built successfully and imported `app.server` and `agent.mcp`. |
-| Docker health | A short-lived container using the fixture database returned `{"status":"live"}` and `{"status":"ready","dataset":"canonical-ci-fixture-1"}`. |
+The test runner emitted one local cache-permission warning; it did not affect
+test execution or assertions.
 
-## Security and deployment boundaries
+## Evaluation boundaries
 
-BYOK credentials are request-scoped HTTP headers, never request-body fields.
-They are not retained by sessions, provider factories, traces, or safe error
-responses. The service applies explicit CORS configuration, request-size and
-rate limits, provider timeout/retry/circuit-breaker controls, and a bounded
-tool-call policy. Document text is treated as data in both understanding and
-synthesis prompts.
+The checked-in fixture is intentionally small. The retrieval ablation runner
+reports only measurements it actually executes and rejects missing or
+mismatched hybrid artifacts; it does not fill dense, RRF, reranker, or MMR
+columns with placeholder values. Dense retrieval and reranking require the
+optional model/index artifacts and were not claimed as local measurements here.
+Full-corpus latency percentiles, external-model token cost, and holdout scores
+therefore remain unreported until those artifacts are supplied.
 
-The Docker image uses a non-root user and exposes `/health/live`; Compose
-provides CPU and GPU profiles with persistent artifact mounts.
+## Security and operational boundaries
+
+BYOK credentials are request-scoped and excluded from sessions, traces,
+metrics, caches, and error bodies. Tool calls are read-only, typed, bounded by
+timeouts and call limits, and document text is treated as data rather than
+instructions. Curriculum answers describe the published plan; they are not
+real-time offering, capacity, grade, or official graduation decisions.
 
 ## Known limitations
 
-- The public repository contains only a small offline fixture. Full corpus
-  retrieval, dense-model ablation, latency percentiles, and external-model cost
-  benchmarks require the separately released data/model resources and are not
-  represented here as synthetic numbers.
-- Curriculum plans are not real-time course offerings, capacity, grades, or an
-  official graduation decision.
-- `review_required` records are not silently promoted to definitive policy
-  facts.
-- The in-memory session store is bounded for local deployment; multi-worker
-  production should select the optional Redis store.
-
-## Diff summary
-
-Against the prior source layout, the final index removes the historical V2–V16
-runtime/server/query/test/documentation paths and tracked generated corpora,
-while retaining the canonical packages, documents, build scripts, CI workflow,
-and offline fixture. User-owned untracked `backups/`, `deliveries/`, and
-`tools/` material is intentionally outside this report and was not staged.
+- The public repository does not contain the full released corpus or optional
+  dense-model artifacts.
+- The local session implementation is bounded in memory; a multi-worker
+  deployment should use the optional Redis store.
+- External LLM behavior and GPU performance require a separately configured
+  provider and should be evaluated with an untouched holdout set.

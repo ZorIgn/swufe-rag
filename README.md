@@ -2,7 +2,7 @@
 
 [![tests](https://github.com/ZorIgn/swufe-rag/actions/workflows/tests.yml/badge.svg)](https://github.com/ZorIgn/swufe-rag/actions/workflows/tests.yml)
 
-面向西南财经大学学生的教务知识问答系统。项目将培养方案课程表、毕业学分要求和校级教务制度放在同一条可验证的查询链路中：适合精确计算的课程事实交给 SQLite，适合解释的制度文本交给混合 RAG，大语言模型负责理解自然语言和组织表达，程序负责校验数字、课程集合、范围和引用。
+面向西南财经大学学生的教务知识问答系统。项目将培养方案课程表、毕业学分要求和校级教务制度放在同一条可验证的查询链路中：适合精确计算的课程事实交给 SQLite，适合解释的制度文本交给作用域检索与 RAG（可按配置启用混合检索），大语言模型负责理解自然语言和组织表达，程序负责校验数字、课程集合、范围和引用。
 
 系统的目标不是让模型“记住”教务信息，而是让每个学校事实都能回到来源、物理页码和对应证据。
 
@@ -82,10 +82,10 @@ uv sync --extra dev
 python -m scripts.download_dataset --source-dir <released-data-directory>
 # 或：python -m scripts.download_dataset --url <dataset-zip-url>
 python -m scripts.build_all
-python -m scripts.verify_dataset --allow-unverified-requirements
+python -m scripts.verify_dataset --allow-review-required-requirements
 ```
 
-`--allow-unverified-requirements` 只允许带有 `review_required` 标记的培养要求出现在清单中；这些记录仍不会被回答逻辑当作已确认事实。构建结果默认位于 `data/academic.sqlite3` 和 `artifacts/manifests/`。如果只运行离线结构化测试，可以直接使用仓库中的 `tests/canonical/data/` 小型数据夹具。
+`--allow-review-required-requirements` 只允许带有 `review_required` 标记的培养要求出现在清单中；这些记录仍不会被回答逻辑当作已确认事实。构建结果默认位于 `data/academic.sqlite3` 和 `artifacts/manifests/`。如果只运行离线结构化测试，可以直接使用仓库中的 `tests/canonical/data/` 小型数据夹具。
 
 ### 3. 启动服务
 
@@ -145,7 +145,7 @@ Canonical 测试覆盖实体归一化、工具规划、SQLite 操作、来源版
 ```powershell
 python -m scripts.download_dataset --source-dir <released-data-directory>
 python -m scripts.build_all
-python -m scripts.verify_dataset --allow-unverified-requirements
+python -m scripts.verify_dataset --allow-review-required-requirements
 ```
 
 `verify_dataset` 会检查重复来源、孤立知识块和 provenance、页码、课程代码、学分、学期、专业关系、重复课程以及缺少证据的培养要求。严重错误会阻止构建，避免把无法追溯的数字直接写入数据库。

@@ -27,7 +27,12 @@ from query.schemas import NormalizedQuery
 
 def _claim(text: str, facts: list[Fact], claim_id: str) -> ClaimSpan:
     evidence = tuple(sorted({item for fact in facts for item in fact.evidence_ids}))
-    return ClaimSpan(text=text, fact_ids=tuple(fact.fact_id for fact in facts), evidence_ids=evidence, validation=ClaimValidation(claim_id=claim_id, passed=False))
+    return ClaimSpan(
+        text=text,
+        fact_ids=tuple(fact.fact_id for fact in facts),
+        evidence_ids=evidence,
+        validation=ClaimValidation(claim_id=claim_id, passed=False),
+    )
 
 
 class StructuredModel(Protocol):
@@ -59,9 +64,19 @@ class DeterministicSynthesizer:
 
     def synthesize(self, query: NormalizedQuery, packet: EvidencePacket) -> FinalAnswer:
         if query.missing_fields:
-            labels = {"cohort": "入学年级", "program": "专业", "at_least_two_programs": "至少两个需要比较的专业"}
-            clarification = "请补充：" + "、".join(labels.get(item, item) for item in query.missing_fields) + "。"
-            return FinalAnswer(answer_md=clarification, claims=(), citations=(), clarification=clarification)
+            labels = {
+                "cohort": "入学年级",
+                "program": "专业",
+                "at_least_two_programs": "至少两个需要比较的专业",
+            }
+            clarification = (
+                "请补充："
+                + "、".join(labels.get(item, item) for item in query.missing_fields)
+                + "。"
+            )
+            return FinalAnswer(
+                answer_md=clarification, claims=(), citations=(), clarification=clarification
+            )
         by_subject: dict[str, list[Fact]] = defaultdict(list)
         for value in packet.facts:
             by_subject[value.subject].append(value)
@@ -71,31 +86,136 @@ class DeterministicSynthesizer:
                 data = {fact.predicate: fact for fact in facts}
                 if {"name", "code", "credits", "semester"}.issubset(data):
                     text = f"{data['name'].value}（{data['code'].value}）：{data['credits'].value:g} 学分，第 {data['semester'].value} 学期开设。"
-                    claims.append(_claim(text, [data[key] for key in ("name", "code", "credits", "semester", "nature", "module") if key in data], f"claim-{len(claims) + 1}"))
+                    claims.append(
+                        _claim(
+                            text,
+                            [
+                                data[key]
+                                for key in (
+                                    "name",
+                                    "code",
+                                    "credits",
+                                    "semester",
+                                    "nature",
+                                    "module",
+                                )
+                                if key in data
+                            ],
+                            f"claim-{len(claims) + 1}",
+                        )
+                    )
         elif query.intent in {"graduation_requirements", "module_requirements"}:
             for subject, facts in by_subject.items():
                 for fact in facts:
-                    if fact.predicate == "required_credits" and isinstance(fact.value, (int, float)):
-                        claims.append(_claim(f"{subject}最低要求为 {fact.value:g} 学分。", [fact], f"claim-{len(claims) + 1}"))
+                    if fact.predicate == "required_credits" and isinstance(
+                        fact.value, (int, float)
+                    ):
+                        claims.append(
+                            _claim(
+                                f"{subject}最低要求为 {fact.value:g} 学分。",
+                                [fact],
+                                f"claim-{len(claims) + 1}",
+                            )
+                        )
         elif query.intent == "progress_audit":
             for subject, facts in by_subject.items():
                 values = {fact.predicate: fact for fact in facts}
                 if "remaining_credits" in values:
                     fact = values["remaining_credits"]
-                    claims.append(_claim(f"{subject}尚差 {fact.value:g} 学分。", [fact], f"claim-{len(claims) + 1}"))
+                    claims.append(
+                        _claim(
+                            f"{subject}尚差 {fact.value:g} 学分。",
+                            [fact],
+                            f"claim-{len(claims) + 1}",
+                        )
+                    )
         elif query.intent == "compare_programs":
             for subject, facts in by_subject.items():
                 for fact in facts:
-                    if fact.predicate == "graduation_min_credits":
-                        claims.append(_claim(f"{subject}的模块最低学分合计为 {fact.value:g} 学分。", [fact], f"claim-{len(claims) + 1}"))
+                    if fact.predicate == "graduation_min_credits" and isinstance(
+                        fact.value, (int, float)
+                    ):
+                        claims.append(
+                            _claim(
+                                f"{subject}的毕业最低学分为 {fact.value:g} 学分。",
+                                [fact],
+                                f"claim-{len(claims) + 1}",
+                            )
+                        )
+                    elif fact.predicate == "sum_of_structured_module_minimums" and isinstance(
+                        fact.value, (int, float)
+                    ):
+                        claims.append(
+                            _claim(
+                                f"{subject}的结构化模块最低学分合计为 {fact.value:g} 学分（不等同于已观测的毕业最低学分）。",
+                                [fact],
+                                f"claim-{len(claims) + 1}",
+                            )
+                        )
+                    elif fact.predicate == "module_required_credits" and isinstance(
+                        fact.value, (int, float)
+                    ):
+                        claims.append(
+                            _claim(
+                                f"{subject}的一个模块最低要求为 {fact.value:g} 学分。",
+                                [fact],
+                                f"claim-{len(claims) + 1}",
+                            )
+                        )
+                    elif (
+                        fact.predicate == "shared_courses"
+                        and isinstance(fact.value, list)
+                        and fact.value
+                    ):
+                        claims.append(
+                            _claim(
+                                f"两个专业共有课程：{'、'.join(str(value) for value in fact.value)}。",
+                                [fact],
+                                f"claim-{len(claims) + 1}",
+                            )
+                        )
+        elif query.intent in {"course_planning", "curriculum_feasibility"}:
+            for subject, facts in by_subject.items():
+                values = {fact.predicate: fact for fact in facts}
+                if "remaining_credits" in values:
+                    fact = values["remaining_credits"]
+                    if isinstance(fact.value, (int, float)):
+                        claims.append(
+                            _claim(
+                                f"{subject}尚差 {fact.value:g} 学分。",
+                                [fact],
+                                f"claim-{len(claims) + 1}",
+                            )
+                        )
         else:
-            for fact in ([candidate for candidate in packet.facts[:8] if candidate.predicate == "excerpt" and (not any(token in query.raw_question for token in ("多少", "几", "学分", "比例", "分数")) or "学分" in str(candidate.value))] or [candidate for candidate in packet.facts if candidate.predicate == "excerpt"])[:1]:
+            for fact in (
+                [
+                    candidate
+                    for candidate in packet.facts[:8]
+                    if candidate.predicate == "excerpt"
+                    and (
+                        not any(
+                            token in query.raw_question
+                            for token in ("多少", "几", "学分", "比例", "分数")
+                        )
+                        or "学分" in str(candidate.value)
+                    )
+                ]
+                or [candidate for candidate in packet.facts if candidate.predicate == "excerpt"]
+            )[:1]:
                 if fact.predicate == "excerpt" and isinstance(fact.value, str):
                     text = fact.value.replace("\n", " ")[:300].strip()
                     claims.append(_claim(text, [fact], f"claim-{len(claims) + 1}"))
         if not claims:
-            return FinalAnswer(answer_md="当前没有足以形成可验证回答的证据。", claims=(), citations=(), refused=True)
-        answer = FinalAnswer(answer_md="\n\n".join(item.text for item in claims), claims=tuple(claims), citations=())
+            return FinalAnswer(
+                answer_md="当前没有足以形成可验证回答的证据。",
+                claims=(),
+                citations=(),
+                refused=True,
+            )
+        answer = FinalAnswer(
+            answer_md="\n\n".join(item.text for item in claims), claims=tuple(claims), citations=()
+        )
         return render(answer)
 
 
@@ -133,13 +253,20 @@ class LLMClaimSynthesizer:
             ],
         }
         try:
-            raw = self._model.generate(SYNTHESIS_SYSTEM_PROMPT, json.dumps(payload, ensure_ascii=False))
+            raw = self._model.generate(
+                SYNTHESIS_SYSTEM_PROMPT, json.dumps(payload, ensure_ascii=False)
+            )
             body = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
             parsed = _ClaimResponse.model_validate(json.loads(body))
         except (json.JSONDecodeError, ValidationError, ValueError, TypeError):
             return self._fallback.synthesize(query, packet)
         if parsed.clarification and not parsed.claims:
-            return FinalAnswer(answer_md=parsed.clarification, claims=(), citations=(), clarification=parsed.clarification)
+            return FinalAnswer(
+                answer_md=parsed.clarification,
+                claims=(),
+                citations=(),
+                clarification=parsed.clarification,
+            )
         if not parsed.claims:
             return self._fallback.synthesize(query, packet)
         claims = tuple(
@@ -151,7 +278,14 @@ class LLMClaimSynthesizer:
             )
             for claim in parsed.claims
         )
-        return FinalAnswer(answer_md="\n\n".join(claim.text for claim in claims), claims=claims, citations=())
+        return FinalAnswer(
+            answer_md="\n\n".join(claim.text for claim in claims), claims=claims, citations=()
+        )
 
 
-__all__ = ["DeterministicSynthesizer", "EvidenceSynthesizer", "LLMClaimSynthesizer", "StructuredModel"]
+__all__ = [
+    "DeterministicSynthesizer",
+    "EvidenceSynthesizer",
+    "LLMClaimSynthesizer",
+    "StructuredModel",
+]

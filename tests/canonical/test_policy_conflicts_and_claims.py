@@ -273,9 +273,10 @@ def test_equal_authority_policy_conflict_is_exposed_and_blocks_answer(
                 args=RetrievePolicyArgs(question="专业选修最低要求", cohort=2024),
             )
         )
-        assert packet.coverage.policy is not None
-        assert packet.coverage.policy.conflict_free is False
-        assert packet.coverage.policy.version_resolved is False
+        policy_coverage = packet.coverage.for_kind("policy")
+        assert len(policy_coverage) == 1
+        assert policy_coverage[0].conflict_free is False
+        assert policy_coverage[0].version_resolved is False
         assert packet.conflicts
 
         fact = packet.facts[0]

@@ -10,7 +10,11 @@ def render(answer: FinalAnswer) -> FinalAnswer:
     if answer.citations:
         sources = ["### 来源"]
         for index, evidence in enumerate(answer.citations, start=1):
-            page = f"，第 {evidence.provenance.physical_page} 页" if evidence.provenance.physical_page else ""
+            page = (
+                f"，第 {evidence.provenance.physical_page} 页"
+                if evidence.provenance.physical_page
+                else ""
+            )
             link = evidence.page_url or evidence.file_url
             title = f"《{evidence.title}》{page}"
             sources.append(f"- [{index}] [{title}]({link})" if link else f"- [{index}] {title}")
