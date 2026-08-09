@@ -17,10 +17,15 @@ CHECKS = {
     "invalid_program_relation": "SELECT count(*) FROM requirements r LEFT JOIN programs p ON p.program_id=r.program_id WHERE p.program_id IS NULL",
     "duplicate_canonical_course": "SELECT count(*) FROM (SELECT program_id, module_id, course_id, semester, count(*) n FROM program_courses GROUP BY program_id, module_id, course_id, semester HAVING n > 1)",
     "invalid_review_status": "SELECT count(*) FROM source_sections WHERE review_status NOT IN ('verified','review_required','unverified')",
-    "verified_requirement_without_evidence": "SELECT count(*) FROM requirements r LEFT JOIN source_sections ss ON ss.chunk_id=r.chunk_id WHERE r.required_credits IS NOT NULL AND (r.chunk_id IS NULL OR ss.chunk_id IS NULL OR ss.review_status <> 'verified')",
-    "review_required_requirement": "SELECT count(*) FROM requirements r JOIN source_sections ss ON ss.chunk_id=r.chunk_id WHERE r.required_credits IS NOT NULL AND ss.review_status='review_required'",
-    "unverified_requirement": "SELECT count(*) FROM requirements r JOIN source_sections ss ON ss.chunk_id=r.chunk_id WHERE r.required_credits IS NOT NULL AND ss.review_status='unverified'",
-    "orphan_requirement_evidence": "SELECT count(*) FROM source_sections ss LEFT JOIN requirements r ON r.chunk_id=ss.chunk_id LEFT JOIN program_courses pc ON pc.chunk_id=ss.chunk_id WHERE r.chunk_id IS NULL AND pc.chunk_id IS NULL",
+    "invalid_structured_review_status": "SELECT count(*) FROM (SELECT review_status FROM program_courses UNION ALL SELECT review_status FROM requirements) WHERE review_status NOT IN ('verified','review_required','unverified')",
+    "verified_program_course_without_evidence": "SELECT count(*) FROM program_courses pc LEFT JOIN source_sections ss ON ss.chunk_id=pc.chunk_id AND ss.source_id=pc.source_id WHERE pc.review_status='verified' AND (pc.chunk_id IS NULL OR ss.chunk_id IS NULL OR ss.review_status <> 'verified')",
+    "program_course_evidence_status_mismatch": "SELECT count(*) FROM program_courses pc LEFT JOIN source_sections ss ON ss.chunk_id=pc.chunk_id WHERE pc.chunk_id IS NOT NULL AND (ss.chunk_id IS NULL OR ss.source_id <> pc.source_id OR ss.review_status <> pc.review_status)",
+    "verified_requirement_without_evidence": "SELECT count(*) FROM requirements r LEFT JOIN source_sections ss ON ss.chunk_id=r.chunk_id AND ss.source_id=r.source_id WHERE r.required_credits IS NOT NULL AND r.review_status='verified' AND (r.chunk_id IS NULL OR ss.chunk_id IS NULL OR ss.review_status <> 'verified')",
+    "review_required_requirement": "SELECT count(*) FROM requirements r JOIN source_sections ss ON ss.chunk_id=r.chunk_id AND ss.source_id=r.source_id WHERE r.required_credits IS NOT NULL AND r.review_status='review_required' AND ss.review_status='review_required'",
+    "review_required_requirement_without_evidence": "SELECT count(*) FROM requirements r LEFT JOIN source_sections ss ON ss.chunk_id=r.chunk_id AND ss.source_id=r.source_id WHERE r.required_credits IS NOT NULL AND r.review_status='review_required' AND (r.chunk_id IS NULL OR ss.chunk_id IS NULL OR ss.review_status <> 'review_required')",
+    "unverified_requirement": "SELECT count(*) FROM requirements r WHERE r.required_credits IS NOT NULL AND r.review_status='unverified'",
+    "requirement_evidence_status_mismatch": "SELECT count(*) FROM requirements r LEFT JOIN source_sections ss ON ss.chunk_id=r.chunk_id WHERE r.chunk_id IS NOT NULL AND (ss.chunk_id IS NULL OR ss.source_id <> r.source_id OR ss.review_status <> r.review_status)",
+    "orphan_requirement_evidence": "SELECT count(*) FROM requirements r LEFT JOIN source_sections ss ON ss.chunk_id=r.chunk_id AND ss.source_id=r.source_id WHERE r.chunk_id IS NOT NULL AND ss.chunk_id IS NULL",
 }
 
 
@@ -36,13 +41,12 @@ def main() -> None:
     with sqlite3.connect(args.database) as connection:
         results = {name: int(connection.execute(sql).fetchone()[0]) for name, sql in CHECKS.items()}
     print(json.dumps(results, ensure_ascii=False, indent=2))
-    failures = {
-        name: value
-        for name, value in results.items()
-        if value and name not in {"review_required_requirement"}
-    }
-    if results["review_required_requirement"] and not args.allow_review_required_requirements:
-        failures["review_required_requirement"] = results["review_required_requirement"]
+    allowed = (
+        {"review_required_requirement"}
+        if args.allow_review_required_requirements
+        else set()
+    )
+    failures = {name: value for name, value in results.items() if value and name not in allowed}
     if failures:
         raise SystemExit(f"dataset verification failed: {failures}")
 

@@ -1,2 +1,3 @@
 {"chunk_id":"fixture-plan-1","text":"测试专业X培养方案。测试专业X专业选修最低要求为 3 学分。","doc_title":"Canonical CI curriculum fixture","article":"测试专业X / 原文件第1页","cohort":"2024","is_table":false,"review_status":"verified"}
 {"chunk_id":"fixture-plan-2","text":"测试专业Y培养方案。测试专业Y专业选修最低要求为 4 学分。","doc_title":"Canonical CI curriculum fixture","article":"测试专业Y / 原文件第2页","cohort":"2024","is_table":false,"review_status":"verified"}
+{"chunk_id":"fixture-policy-1","text":"学生申请转专业应提交材料，具体条件以学校转专业管理办法为准；跨专业选修课程须遵守学校选课规定。","doc_title":"Canonical CI curriculum fixture","article":"学校政策 / 原文件第3页","cohort":"2024","is_table":false,"review_status":"verified"}

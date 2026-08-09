@@ -133,6 +133,18 @@ def normalize(
             ambiguous_course_mentions.append(mention)
         else:
             warnings.append(f"course_unmatched:{mention}")
+    # The deterministic parser deliberately avoids embedding a catalogue of
+    # course names.  Resolve ordinary names from the scoped database instead.
+    # Keep ambiguous aliases visible so a single-course request clarifies rather
+    # than silently falling back to policy retrieval or listing every course.
+    if draft.intent in {"course_query", "course_detail"}:
+        for alias, candidates in resolver.course_mentions_in_text(
+            question, cohort, primary_program
+        ):
+            if len(candidates) == 1:
+                _append_unique(courses, candidates[0])
+            elif alias not in ambiguous_course_mentions:
+                ambiguous_course_mentions.append(alias)
 
     modules: list[ResolvedEntity] = []
     ambiguous_module_mentions: list[str] = []
@@ -180,14 +192,17 @@ def normalize(
                 ambiguous_completed.append(alias)
 
     intent = draft.intent
+    requested_outputs = draft.requested_outputs
     if (
-        intent in {"course_query", "course_detail"}
-        and not programs
+        intent == "course_query"
+        and courses
         and not draft.target_semesters
         and not draft.course_natures
-        and not draft.course_codes
     ):
-        intent = "policy"
+        intent = "course_detail"
+        requested_outputs = tuple(
+            "course_detail" if item == "course_list" else item for item in requested_outputs
+        ) or ("course_detail",)
     structured = {
         "course_query",
         "course_detail",
@@ -225,7 +240,7 @@ def normalize(
     return NormalizedQuery(
         raw_question=question,
         intent=intent,
-        requested_outputs=draft.requested_outputs,
+        requested_outputs=requested_outputs,
         cohort=cohort,
         program_ids=tuple(item.canonical_id for item in programs),
         program_names=tuple(item.canonical_name for item in programs),

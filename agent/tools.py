@@ -8,17 +8,26 @@ dependency has succeeded.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from enum import Enum
 from inspect import Parameter, signature
 from time import monotonic
-from typing import TYPE_CHECKING, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 from agent.policies import RuntimePolicy
-from agent.registry import RegisteredTool, ToolRegistry
-from evidence.models import CoverageComponent, CoverageReport, EvidencePacket, ToolExecutionResult
+from agent.registry import ContextualTool, RegisteredTool, ToolExecutionContext, ToolRegistry
+from evidence.models import (
+    CoverageComponent,
+    CoverageReport,
+    DerivedFact,
+    Evidence,
+    EvidencePacket,
+    Fact,
+    ToolExecutionResult,
+)
 from evidence.provenance import stable_id
 from query.schemas import (
     ALL_OPERATION_TYPES,
@@ -40,21 +49,6 @@ class ToolFailure:
     retryable: bool
 
 
-@dataclass(frozen=True)
-class ToolExecutionContext:
-    """Evidence available to a context-aware tool invocation.
-
-    ``prior_packets`` contains every successful packet from an earlier DAG wave,
-    sorted by operation ID. ``dependency_packets`` is the corresponding
-    deterministic subset for direct dependencies.
-    """
-
-    plan_id: str
-    operation_id: str
-    prior_packets: tuple[EvidencePacket, ...]
-    dependency_packets: tuple[EvidencePacket, ...]
-
-
 class _ExecutionState(str, Enum):
     PENDING = "pending"
     RUNNING = "running"
@@ -68,12 +62,6 @@ class _RunningTool:
     operation: Operation
     started_at: float
     deadline: float
-
-
-class _KeywordContextTool(Protocol):
-    def __call__(
-        self, operation: Operation, *, context: ToolExecutionContext
-    ) -> EvidencePacket: ...
 
 
 def _unique(values: tuple[str, ...] | list[str]) -> tuple[str, ...]:
@@ -102,8 +90,17 @@ def _merge(
         (operation_id, packets_by_operation[operation_id])
         for operation_id in sorted(packets_by_operation)
     )
-    facts = {fact.fact_id: fact for _, packet in ordered_packets for fact in packet.facts}
-    evidence = {item.evidence_id: item for _, packet in ordered_packets for item in packet.evidence}
+    # Dict insertion order preserves the ranking emitted inside each tool
+    # packet while still deduplicating stable identifiers.  Sorting by hash-like
+    # fact/evidence IDs here used to destroy retrieval order, so the policy
+    # synthesizer could quote an arbitrary lower-ranked chunk as its Top-1.
+    facts: dict[str, Fact | DerivedFact] = {}
+    evidence: dict[str, Evidence] = {}
+    for _, packet in ordered_packets:
+        for fact in packet.facts:
+            facts.setdefault(fact.fact_id, fact)
+        for item in packet.evidence:
+            evidence.setdefault(item.evidence_id, item)
     components: dict[str, CoverageComponent] = {}
     duplicate_components: list[str] = []
     for _, packet in ordered_packets:
@@ -129,8 +126,8 @@ def _merge(
     )
     return EvidencePacket(
         packet_id=stable_id("packet", plan_id),
-        facts=tuple(facts[fact_id] for fact_id in sorted(facts)),
-        evidence=tuple(evidence[evidence_id] for evidence_id in sorted(evidence)),
+        facts=tuple(facts.values()),
+        evidence=tuple(evidence.values()),
         coverage=CoverageReport(
             components=tuple(components[operation_id] for operation_id in sorted(components))
         ),
@@ -439,13 +436,14 @@ class PlanExecutor:
             contextual = cast(Callable[[Operation, ToolExecutionContext], EvidencePacket], callback)
             return contextual(operation, context)
         if context_style == "keyword":
-            contextual_keyword = cast(_KeywordContextTool, callback)
+            contextual_keyword = cast(ContextualTool[Operation], callback)
             return contextual_keyword(operation, context=context)
-        return callback(operation)
+        standard = cast(Callable[[Operation], EvidencePacket], callback)
+        return standard(operation)
 
     @staticmethod
     def _context_style(
-        callback: Callable[[Operation], EvidencePacket],
+        callback: Callable[[Operation], EvidencePacket] | ContextualTool[Operation],
     ) -> Literal["none", "positional", "keyword"]:
         try:
             parameters = tuple(signature(callback).parameters.values())
@@ -475,6 +473,135 @@ class PlanExecutor:
         if any(parameter.kind is Parameter.VAR_KEYWORD for parameter in parameters):
             return "keyword"
         return "none"
+
+
+_SEMESTER_NUMBER = re.compile(r"^\s*(\d+)")
+
+
+def _semester_number(value: object) -> int | None:
+    match = _SEMESTER_NUMBER.match(str(value or ""))
+    return int(match.group(1)) if match else None
+
+
+def _fact_value(
+    values: dict[str, Fact | DerivedFact], predicate: str
+) -> object | None:
+    fact = values.get(predicate)
+    return fact.value if fact is not None else None
+
+
+def _string_fact_value(
+    values: dict[str, Fact | DerivedFact], predicate: str, *, default: str = ""
+) -> str:
+    value = _fact_value(values, predicate)
+    return default if value is None else str(value)
+
+
+def _numeric_fact(
+    values: dict[str, Fact | DerivedFact], predicate: str
+) -> Fact | DerivedFact | None:
+    fact = values.get(predicate)
+    return fact if fact is not None and isinstance(fact.value, (int, float)) else None
+
+
+def _fact_float(value: object) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    raise TypeError(f"fact value is not numeric: {value!r}")
+
+
+def _course_groups(
+    packets: tuple[EvidencePacket, ...],
+) -> dict[str, dict[str, Fact | DerivedFact]]:
+    groups: dict[str, dict[str, Fact | DerivedFact]] = {}
+    for packet in packets:
+        for fact in packet.facts:
+            if fact.type == "course":
+                groups.setdefault(fact.subject, {})[fact.predicate] = fact
+    return groups
+
+
+def _pack_course_groups(
+    *,
+    operation_id: str,
+    tool_name: str,
+    source_packets: tuple[EvidencePacket, ...],
+    groups: dict[str, dict[str, Fact | DerivedFact]],
+    selected_subjects: set[str],
+    warning_codes: tuple[str, ...] = (),
+) -> EvidencePacket:
+    facts = tuple(
+        fact
+        for subject in sorted(selected_subjects)
+        for fact in groups.get(subject, {}).values()
+    )
+    evidence_ids = {evidence_id for fact in facts for evidence_id in fact.evidence_ids}
+    evidence_by_id = {
+        evidence.evidence_id: evidence
+        for packet in source_packets
+        for evidence in packet.evidence
+    }
+    source_components = tuple(
+        component
+        for packet in source_packets
+        for component in packet.coverage.components
+        if component.kind == "course_set"
+    )
+    complete = bool(source_components) and all(component.complete for component in source_components)
+    trusted = bool(source_components) and all(
+        component.trusted_evidence is not False for component in source_components
+    )
+    reason_values: list[str] = []
+    if not source_components:
+        reason_values.append("course_dependency_missing")
+    if not complete:
+        reason_values.append("course_dependency_incomplete")
+    if not selected_subjects:
+        reason_values.append("empty_result")
+    reasons = tuple(reason_values)
+    return EvidencePacket(
+        packet_id=stable_id("packet", operation_id),
+        facts=facts,
+        evidence=tuple(
+            evidence_by_id[evidence_id]
+            for evidence_id in sorted(evidence_ids)
+            if evidence_id in evidence_by_id
+        ),
+        coverage=CoverageReport(
+            components=(
+                CoverageComponent(
+                    operation_id=operation_id,
+                    tool_name=tool_name,
+                    kind="course_set",
+                    complete=complete,
+                    expected_count=len(selected_subjects),
+                    returned_count=len(selected_subjects),
+                    scope_matched=True,
+                    version_resolved=True,
+                    conflict_free=True,
+                    trusted_evidence=trusted,
+                    reasons=reasons,
+                ),
+            )
+        ),
+        warnings=warning_codes,
+    )
+
+
+def _completed_course_subjects(packets: tuple[EvidencePacket, ...]) -> set[str]:
+    return {
+        fact.subject
+        for packet in packets
+        if any(component.kind == "audit" for component in packet.coverage.components)
+        for fact in packet.facts
+        if fact.type == "course"
+    }
+
+
+def _is_mandatory_course(values: dict[str, Fact | DerivedFact]) -> bool:
+    nature = _string_fact_value(values, "nature").lower()
+    module = _string_fact_value(values, "module").lower()
+    return "必修" in nature or "required" in nature or "实践" in module or "practice" in module
 
 
 def standard_registry(academic: AcademicTools, policy: RuntimePolicy) -> ToolRegistry:
@@ -533,66 +660,362 @@ def standard_registry(academic: AcademicTools, policy: RuntimePolicy) -> ToolReg
         RegisteredTool("source.resolve", "resolve_source", True, timeout, academic.resolve_source)
     )
 
-    def before(operation: ListCoursesBeforeSemesterOperation) -> EvidencePacket:
-        records = academic.repository.list_courses(
-            cohort=operation.args.cohort,
-            program_id=operation.args.program_id,
-            natures=operation.args.course_natures,
+    def before(
+        operation: ListCoursesBeforeSemesterOperation, *, context: ToolExecutionContext
+    ) -> EvidencePacket:
+        catalog_packets = tuple(
+            packet
+            for packet in context.dependency_packets
+            if any(component.kind == "course_set" for component in packet.coverage.components)
         )
-        selected = tuple(
-            record
-            for record in records
-            if record.semester[:1].isdigit()
-            and int(record.semester[:1]) < operation.args.deadline_semester
-        )
-        return academic._courses_packet(
-            selected,
-            program_id=operation.args.program_id,
-            filters=("before_semester",),
+        groups = _course_groups(catalog_packets)
+        completed = _completed_course_subjects(context.dependency_packets)
+        unresolved = {
+            subject
+            for subject, values in groups.items()
+            if subject not in completed
+            and _semester_number(_fact_value(values, "semester"))
+            is None
+        }
+        selected = {
+            subject
+            for subject, values in groups.items()
+            if subject not in completed
+            and (
+                semester := _semester_number(_fact_value(values, "semester"))
+            )
+            is not None
+            and semester < operation.args.deadline_semester
+        }
+        return _pack_course_groups(
             operation_id=operation.operation_id,
+            tool_name="academic.list_courses_before_semester",
+            source_packets=catalog_packets,
+            groups=groups,
+            selected_subjects=selected,
+            warning_codes=("course_semester_unresolved",) if unresolved else (),
         )
 
-    def unavoidable(operation: ListUnavoidableCoursesOperation) -> EvidencePacket:
-        records = academic.repository.list_courses(
-            cohort=operation.args.cohort, program_id=operation.args.program_id
+    def unavoidable(
+        operation: ListUnavoidableCoursesOperation, *, context: ToolExecutionContext
+    ) -> EvidencePacket:
+        catalog_packets = tuple(
+            packet
+            for packet in context.dependency_packets
+            if any(component.kind == "course_set" for component in packet.coverage.components)
         )
-        selected = tuple(
-            record
-            for record in records
-            if record.semester[:1].isdigit()
-            and int(record.semester[:1]) > operation.args.after_semester
-            and ("必修" in (record.nature or "") or "实践" in record.module_name)
-        )
-        return academic._courses_packet(
-            selected,
-            program_id=operation.args.program_id,
-            filters=("unavoidable_after_semester",),
+        groups = _course_groups(catalog_packets)
+        completed = _completed_course_subjects(context.dependency_packets)
+        unresolved_mandatory = {
+            subject
+            for subject, values in groups.items()
+            if subject not in completed
+            and _is_mandatory_course(values)
+            and _semester_number(_fact_value(values, "semester"))
+            is None
+        }
+        # deadline_semester is an exclusive boundary: "before semester 7"
+        # means semesters 1-6 are usable and semester 7 itself is already late.
+        selected = {
+            subject
+            for subject, values in groups.items()
+            if subject not in completed
+            and _is_mandatory_course(values)
+            and (
+                semester := _semester_number(_fact_value(values, "semester"))
+            )
+            is not None
+            and semester >= operation.args.after_semester
+        }
+        return _pack_course_groups(
             operation_id=operation.operation_id,
+            tool_name="academic.list_unavoidable_courses",
+            source_packets=catalog_packets,
+            groups=groups,
+            selected_subjects=selected,
+            warning_codes=("mandatory_course_semester_unresolved",)
+            if unresolved_mandatory
+            else (),
         )
 
-    def feasibility(operation: CheckCurriculumFeasibilityOperation) -> EvidencePacket:
-        records = academic.repository.list_courses(
-            cohort=operation.args.cohort, program_id=operation.args.program_id
+    def feasibility(
+        operation: CheckCurriculumFeasibilityOperation, *, context: ToolExecutionContext
+    ) -> EvidencePacket:
+        audit_packet = next(
+            (
+                packet
+                for packet in context.dependency_packets
+                if any(component.kind == "audit" for component in packet.coverage.components)
+            ),
+            None,
         )
-        unavoidable_records = tuple(
-            record
-            for record in records
-            if record.semester[:1].isdigit()
-            and int(record.semester[:1]) >= operation.args.deadline_semester
-            and ("必修" in (record.nature or "") or "实践" in record.module_name)
+        before_packet = next(
+            (
+                packet
+                for packet in context.dependency_packets
+                if any(
+                    component.tool_name == "academic.list_courses_before_semester"
+                    for component in packet.coverage.components
+                )
+            ),
+            None,
         )
-        packet = academic._courses_packet(
-            unavoidable_records,
-            program_id=operation.args.program_id,
-            filters=("feasibility",),
-            operation_id=operation.operation_id,
+        unavoidable_packet = next(
+            (
+                packet
+                for packet in context.dependency_packets
+                if any(
+                    component.tool_name == "academic.list_unavoidable_courses"
+                    for component in packet.coverage.components
+                )
+            ),
+            None,
         )
-        warning = (
-            "curriculum_feasibility:infeasible"
-            if unavoidable_records
-            else "curriculum_feasibility:feasible"
+        dependencies = tuple(
+            packet
+            for packet in (audit_packet, before_packet, unavoidable_packet)
+            if packet is not None
         )
-        return packet.model_copy(update={"warnings": (*packet.warnings, warning)})
+        remaining_facts = tuple(
+            fact
+            for fact in (() if audit_packet is None else audit_packet.facts)
+            if fact.predicate == "remaining_credits" and isinstance(fact.value, (int, float))
+        )
+        completed_ids = {
+            str(fact.value)
+            for fact in (() if audit_packet is None else audit_packet.facts)
+            if fact.type == "course" and fact.predicate == "course_id"
+        }
+        requested_completed_ids = set(operation.args.completed_course_ids)
+        before_groups = _course_groups(() if before_packet is None else (before_packet,))
+        blocker_groups = _course_groups(
+            () if unavoidable_packet is None else (unavoidable_packet,)
+        )
+
+        facts: list[Fact | DerivedFact] = []
+        evidence_by_id = {
+            evidence.evidence_id: evidence
+            for packet in dependencies
+            for evidence in packet.evidence
+        }
+        reasons: list[Fact] = []
+        shortfall_found = False
+        uncertainty_found = False
+
+        if len(dependencies) != 3 or not remaining_facts:
+            uncertainty_found = True
+            reasons.append(
+                Fact(
+                    fact_id=stable_id("fact", operation.operation_id, "missing_dependencies"),
+                    type="diagnostic",
+                    subject="培养方案可行性",
+                    predicate="feasibility_reason",
+                    value="缺少完整的培养方案要求或依赖计算结果。",
+                    derivation="tool_result",
+                )
+            )
+        if not requested_completed_ids.issubset(completed_ids):
+            uncertainty_found = True
+            reasons.append(
+                Fact(
+                    fact_id=stable_id("fact", operation.operation_id, "completed_id_mismatch"),
+                    type="diagnostic",
+                    subject="培养方案可行性",
+                    predicate="feasibility_reason",
+                    value="部分已修课程未出现在上游学业审计结果中。",
+                    derivation="tool_result",
+                )
+            )
+
+        for subject, values in sorted(blocker_groups.items()):
+            name = _string_fact_value(values, "name", default=subject)
+            semester = _semester_number(_fact_value(values, "semester"))
+            blocker_support = tuple(values.values())
+            reasons.append(
+                Fact(
+                    fact_id=stable_id("fact", operation.operation_id, subject, "late_mandatory"),
+                    type="progress",
+                    subject=name,
+                    predicate="feasibility_reason",
+                    value=(
+                        f"{name}安排在第{semester}学期且尚未完成，"
+                        f"不满足第{operation.args.deadline_semester}学期开始前完成的目标。"
+                    ),
+                    source_record_ids=tuple(
+                        dict.fromkeys(
+                            record_id
+                            for fact in blocker_support
+                            for record_id in fact.source_record_ids
+                        )
+                    ),
+                    evidence_ids=tuple(
+                        dict.fromkeys(
+                            evidence_id
+                            for fact in blocker_support
+                            for evidence_id in fact.evidence_ids
+                        )
+                    ),
+                    derivation="tool_result",
+                )
+            )
+
+        remaining_by_module = {fact.subject: fact for fact in remaining_facts}
+        before_by_module: dict[str, list[dict[str, Fact | DerivedFact]]] = {}
+        for values in before_groups.values():
+            module_fact = values.get("module")
+            if module_fact is not None:
+                before_by_module.setdefault(str(module_fact.value), []).append(values)
+
+        for module, remaining_fact in sorted(remaining_by_module.items()):
+            gap = _fact_float(remaining_fact.value)
+            if gap <= 0:
+                continue
+            candidates = before_by_module.get(module, [])
+            credit_facts = tuple(
+                credit_fact
+                for values in candidates
+                if (credit_fact := _numeric_fact(values, "credits")) is not None
+            )
+            available = sum((_fact_float(fact.value) for fact in credit_facts), 0.0)
+            missing_credit = any(values.get("credits") is None for values in candidates)
+            credit_support: tuple[Fact | DerivedFact, ...] = (remaining_fact, *credit_facts)
+            support_evidence = tuple(
+                dict.fromkeys(
+                    evidence_id for fact in credit_support for evidence_id in fact.evidence_ids
+                )
+            )
+            support_records = tuple(
+                dict.fromkeys(
+                    record_id for fact in credit_support for record_id in fact.source_record_ids
+                )
+            )
+            if available + 1e-9 < gap and missing_credit:
+                uncertainty_found = True
+                reasons.append(
+                    Fact(
+                        fact_id=stable_id("fact", operation.operation_id, module, "credits_unknown"),
+                        type="diagnostic",
+                        subject=module,
+                        predicate="feasibility_reason",
+                        value=f"{module}尚差{gap:g}学分，但边界前课程存在未标注学分，无法判断是否足够。",
+                        derivation="tool_result",
+                    )
+                )
+            elif available + 1e-9 < gap:
+                shortfall_found = True
+                reasons.append(
+                    Fact(
+                        fact_id=stable_id("fact", operation.operation_id, module, "credit_shortfall"),
+                        type="progress",
+                        subject=module,
+                        predicate="feasibility_reason",
+                        value=(
+                            f"{module}尚差{gap:g}学分，但第{operation.args.deadline_semester}"
+                            f"学期开始前列明的未修课程仅有{available:g}学分。"
+                        ),
+                        source_record_ids=support_records,
+                        evidence_ids=support_evidence,
+                        derivation="tool_result",
+                    )
+                )
+            else:
+                reasons.append(
+                    Fact(
+                        fact_id=stable_id("fact", operation.operation_id, module, "capacity"),
+                        type="progress",
+                        subject=module,
+                        predicate="feasibility_reason",
+                        value=(
+                            f"{module}尚差{gap:g}学分，边界前列明的未修课程共有"
+                            f"{available:g}学分，可覆盖该最低学分差额。"
+                        ),
+                        source_record_ids=support_records,
+                        evidence_ids=support_evidence,
+                        derivation="tool_result",
+                    )
+                )
+
+        if any(
+            warning in {"course_semester_unresolved", "mandatory_course_semester_unresolved"}
+            for packet in dependencies
+            for warning in packet.warnings
+        ):
+            uncertainty_found = True
+            reasons.append(
+                Fact(
+                    fact_id=stable_id("fact", operation.operation_id, "semester_unknown"),
+                    type="diagnostic",
+                    subject="培养方案可行性",
+                    predicate="feasibility_reason",
+                    value="仍有课程缺少可解析的开课学期，无法完成边界判断。",
+                    derivation="tool_result",
+                )
+            )
+
+        if blocker_groups or shortfall_found:
+            status = "infeasible"
+            status_text = "不可行（按培养方案结构）"
+        elif uncertainty_found:
+            status = "insufficient_data"
+            status_text = "信息不足，无法判断"
+        else:
+            status = "feasible"
+            status_text = "可行（仅按培养方案结构）"
+            if all(_fact_float(fact.value) <= 0 for fact in remaining_facts):
+                reasons.append(
+                    Fact(
+                        fact_id=stable_id("fact", operation.operation_id, "all_requirements_met"),
+                        type="diagnostic",
+                        subject="培养方案可行性",
+                        predicate="feasibility_reason",
+                        value="所有已结构化模块的最低学分差额均为0，且未发现尚未完成的边界后必修或实践课程。",
+                        derivation="tool_result",
+                    )
+                )
+
+        status_fact = Fact(
+            fact_id=stable_id("fact", operation.operation_id, "status"),
+            type="decision",
+            subject="培养方案可行性",
+            predicate="feasibility_status",
+            value=status_text,
+            derivation="tool_result",
+        )
+        facts.extend((status_fact, *reasons))
+        used_evidence_ids = {evidence_id for fact in facts for evidence_id in fact.evidence_ids}
+        return EvidencePacket(
+            packet_id=stable_id("packet", operation.operation_id),
+            facts=tuple(facts),
+            evidence=tuple(
+                evidence_by_id[evidence_id]
+                for evidence_id in sorted(used_evidence_ids)
+                if evidence_id in evidence_by_id
+            ),
+            coverage=CoverageReport(
+                components=(
+                    CoverageComponent(
+                        operation_id=operation.operation_id,
+                        tool_name="academic.check_curriculum_feasibility",
+                        kind="course_set",
+                        complete=True,
+                        expected_count=len(remaining_facts),
+                        returned_count=len(remaining_facts),
+                        scope_matched=True,
+                        version_resolved=True,
+                        conflict_free=True,
+                        trusted_evidence=all(
+                            component.trusted_evidence is not False
+                            for packet in dependencies
+                            for component in packet.coverage.components
+                        ),
+                        reasons=("feasibility_insufficient_data",)
+                        if status == "insufficient_data"
+                        else (),
+                    ),
+                )
+            ),
+            warnings=(f"curriculum_feasibility:{status}",),
+        )
 
     registry.register(
         RegisteredTool(

@@ -17,7 +17,29 @@ from generation.claim_semantics import fact_signature, polarity_conflicts, text_
 
 NUMBER_RE = re.compile(r"(?<![A-Za-z])\d+(?:\.\d+)?")
 COURSE_CODE_RE = re.compile(r"\b[A-Z]{2,6}\d{2,4}\b", re.I)
+LATIN_TERM_RE = re.compile(r"[A-Za-z0-9]{2,}")
+CHINESE_RUN_RE = re.compile(r"[\u3400-\u9fff]{2,}")
 SCHOOL_FACT_TYPES = frozenset({"course", "requirement", "progress", "comparison", "policy"})
+PREDICATE_LANGUAGE = {
+    "name": "课程名称",
+    "code": "课程代码",
+    "credits": "学分",
+    "semester": "学期开设",
+    "nature": "课程性质",
+    "module": "所属模块",
+    "required_credits": "最低要求学分",
+    "remaining_credits": "尚差剩余学分",
+    "completed_credits": "已修完成学分",
+    "graduation_min_credits": "毕业最低学分",
+    "sum_of_structured_module_minimums": (
+        "结构化模块最低学分合计，不等同于已观测的毕业最低学分"
+    ),
+    "module_required_credits": "模块最低要求学分",
+    "shared_courses": "两个专业共有课程",
+    "courses_only_in_program": "该专业独有课程",
+    "excerpt": "制度条款原文",
+    "feasible": "学业规划可行不可行结论",
+}
 
 
 def _fact_support(
@@ -57,18 +79,51 @@ def _allowed_strings(facts: list[Fact | DerivedFact]) -> tuple[set[str], set[str
     for fact in facts:
         if isinstance(fact.value, (int, float)):
             numbers.add(f"{float(fact.value):g}")
-        elif isinstance(fact.value, str):
-            numbers.update(f"{float(value):g}" for value in NUMBER_RE.findall(fact.value))
-            codes.update(value.upper() for value in COURSE_CODE_RE.findall(fact.value))
+        else:
+            values = fact.value if isinstance(fact.value, list) else [fact.value]
+            for raw_value in values:
+                if not isinstance(raw_value, str):
+                    continue
+                numbers.update(f"{float(value):g}" for value in NUMBER_RE.findall(raw_value))
+                codes.update(value.upper() for value in COURSE_CODE_RE.findall(raw_value))
     return numbers, codes
 
 
 def _entailment_terms(value: object) -> set[str]:
-    """Return generic lexical units for a conservative claim/evidence check."""
+    """Return stable lexical units, including CJK bigrams.
 
-    text = str(value or "")
-    units = re.findall(r"[A-Za-z0-9]{2,}|[\u3400-\u9fff]{2,}", text.lower())
-    return set(units)
+    Treating an entire Chinese clause as one token made a single shared noun
+    sufficient to pass the old entailment guard.  Character bigrams provide a
+    deterministic coverage signal without pretending to be a general NLI model.
+    """
+
+    text = str(value or "").lower()
+    terms = {item.lower() for item in LATIN_TERM_RE.findall(text)}
+    for run in CHINESE_RUN_RE.findall(text):
+        if len(run) == 2:
+            terms.add(run)
+        else:
+            terms.update(run[index : index + 2] for index in range(len(run) - 1))
+    return terms
+
+
+def _fact_terms(fact: Fact | DerivedFact) -> set[str]:
+    terms = _entailment_terms(fact.subject) | _entailment_terms(fact.value)
+    terms.update(_entailment_terms(PREDICATE_LANGUAGE.get(fact.predicate, fact.predicate)))
+    return terms
+
+
+def _facts_share_record(facts: list[Fact | DerivedFact]) -> bool:
+    """Require atomic, non-derived facts in one claim to share a record edge."""
+
+    record_sets = [
+        set(fact.source_record_ids)
+        for fact in facts
+        if not isinstance(fact, DerivedFact) and fact.source_record_ids
+    ]
+    if len(record_sets) <= 1:
+        return True
+    return bool(set.intersection(*record_sets))
 
 
 def _claim_supported_by_text(
@@ -79,13 +134,12 @@ def _claim_supported_by_text(
         return False
     supporting_terms: set[str] = set()
     for fact in facts:
-        supporting_terms.update(_entailment_terms(fact.subject))
-        supporting_terms.update(_entailment_terms(fact.value))
+        supporting_terms.update(_fact_terms(fact))
         for evidence_id in _fact_support(packet, fact.fact_id)[0]:
             evidence = packet.evidence_by_id(evidence_id)
             if evidence is not None:
                 supporting_terms.update(_entailment_terms(evidence.quote))
-    return bool(claim_terms & supporting_terms)
+    return len(claim_terms & supporting_terms) / len(claim_terms) >= 0.60
 
 
 def _citation_supports_claim(claim_text: str, evidence_id: str, packet: EvidencePacket) -> bool:
@@ -126,12 +180,18 @@ def _polarity_conflict_reasons(
             claim, fact_signature(fact.predicate, fact.subject, fact.value)
         ):
             reasons.append(f"claim_predicate_polarity_conflict:{conflict}")
-    for evidence_id in sorted(evidence_ids):
-        evidence = packet.evidence_by_id(evidence_id)
-        if evidence is None:
-            continue
-        for conflict in polarity_conflicts(claim, text_signature(evidence.quote)):
-            reasons.append(f"claim_evidence_polarity_conflict:{conflict}")
+    # A computed/tool-result fact can legitimately combine an optional course
+    # with a mandatory minimum (for example: elective capacity covers a
+    # required credit gap).  Comparing the final claim against every input
+    # excerpt independently creates a false required-vs-optional inversion.
+    # Observed/retrieved claims still receive the direct source polarity guard.
+    if any(fact.derivation in {"observed", "retrieved"} for fact in facts):
+        for evidence_id in sorted(evidence_ids):
+            evidence = packet.evidence_by_id(evidence_id)
+            if evidence is None:
+                continue
+            for conflict in polarity_conflicts(claim, text_signature(evidence.quote)):
+                reasons.append(f"claim_evidence_polarity_conflict:{conflict}")
     return tuple(dict.fromkeys(reasons))
 
 
@@ -196,10 +256,17 @@ class ClaimValidator:
             if _is_school_factual(facts):
                 if missing_inputs:
                     reasons.append("derived_fact_input_missing")
+                if not _facts_share_record(facts):
+                    reasons.append("claim_facts_cross_record")
                 if not valid_evidence:
                     reasons.append("school_fact_without_evidence")
                 if not provided_evidence:
                     reasons.append("school_fact_missing_evidence_binding")
+                elif any(
+                    support and not provided_evidence.intersection(support)
+                    for support in (_fact_support(packet, fact.fact_id)[0] for fact in facts)
+                ):
+                    reasons.append("claim_fact_missing_evidence_binding")
                 missing_evidence, non_verified_evidence = _untrusted_reachable_evidence(
                     packet, valid_evidence
                 )

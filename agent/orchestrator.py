@@ -27,7 +27,7 @@ from generation.renderer import render
 from generation.synthesizer import LLMClaimSynthesizer
 from generation.synthesizer import StructuredModel as SynthesisModel
 from query.context import RequestContext
-from query.schemas import ExecutionPlan
+from query.schemas import ExecutionPlan, NormalizedQuery
 from query.understanding import QuestionUnderstanding as StructuredQuestionUnderstanding
 
 
@@ -276,11 +276,13 @@ class AgentRuntime:
                 )
         return packet
 
-    def _clarify(self, state: AgentState, query: object) -> tuple[FinalAnswer, AgentState]:
+    def _clarify(
+        self, state: AgentState, query: NormalizedQuery
+    ) -> tuple[FinalAnswer, AgentState]:
         state.transition(AgentStatus.CLARIFY)
         answer = self._deps.synthesizer.synthesize(
             query,
-            EvidencePacket(packet_id=stable_id("packet", state.request_id)),  # type: ignore[arg-type]
+            EvidencePacket(packet_id=stable_id("packet", state.request_id)),
         )
         state.answer = answer
         self._deps.tracer.increment("clarification_total")
@@ -290,7 +292,7 @@ class AgentRuntime:
     def _coverage_stop(
         self,
         state: AgentState,
-        query: object,
+        query: NormalizedQuery,
         packet: EvidencePacket,
         decision: CoverageDecision,
     ) -> tuple[FinalAnswer, AgentState]:
@@ -327,8 +329,15 @@ class AgentRuntime:
     ) -> FinalAnswer:
         state.transition(AgentStatus.SYNTHESIZE)
         with self._deps.tracer.start("synthesis", request_id=state.request_id):
-            answer = synthesizer.synthesize(state.normalized_query, packet)  # type: ignore[arg-type]
+            answer = synthesizer.synthesize(self._normalized_query(state), packet)
         return self._validate_same_packet(state, packet, answer=answer)
+
+    @staticmethod
+    def _normalized_query(state: AgentState) -> NormalizedQuery:
+        query = state.normalized_query
+        if query is None:
+            raise RuntimeError("agent state has no normalized query")
+        return query
 
     def _validate_same_packet(
         self,
@@ -340,7 +349,7 @@ class AgentRuntime:
     ) -> FinalAnswer:
         if answer is None:
             assert synthesizer is not None
-            answer = synthesizer.synthesize(state.normalized_query, packet)  # type: ignore[arg-type]
+            answer = synthesizer.synthesize(self._normalized_query(state), packet)
         state.transition(AgentStatus.VALIDATE)
         with self._deps.tracer.start("validation", request_id=state.request_id):
             validated = self._deps.validator.validate(answer, packet)

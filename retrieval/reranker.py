@@ -17,7 +17,12 @@ class CrossEncoderReranker:
                 "hybrid reranking requires `uv sync --extra retrieval`"
             ) from exc
         self.model_name = model_name
-        self._model = CrossEncoder(model_name)
+        try:
+            self._model = CrossEncoder(model_name, local_files_only=True)
+        except OSError as exc:
+            raise DenseUnavailableError(
+                f"local reranker model is unavailable: {model_name}"
+            ) from exc
 
     def rerank(
         self, query: str, candidates: Iterable[RetrievedCandidate]

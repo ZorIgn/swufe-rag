@@ -2,7 +2,7 @@
 
 [![tests](https://github.com/ZorIgn/swufe-rag/actions/workflows/tests.yml/badge.svg)](https://github.com/ZorIgn/swufe-rag/actions/workflows/tests.yml)
 
-面向西南财经大学学生的教务知识问答系统。项目将培养方案课程表、毕业学分要求和校级教务制度放在同一条可验证的查询链路中：适合精确计算的课程事实交给 SQLite，适合解释的制度文本交给作用域检索与 RAG（可按配置启用混合检索），大语言模型负责理解自然语言和组织表达，程序负责校验数字、课程集合、范围和引用。
+面向西南财经大学学生的教务知识问答系统。项目将培养方案课程表、毕业学分要求和校级教务制度放在同一条可验证的查询链路中：适合精确计算的课程事实交给 SQLite，适合解释的制度文本默认交给 BM25 + dense + RRF + CrossEncoder + MMR 混合检索，大语言模型负责理解自然语言和组织表达，程序负责校验数字、课程集合、范围和引用。
 
 系统的目标不是让模型“记住”教务信息，而是让每个学校事实都能回到来源、物理页码和对应证据。
 
@@ -20,7 +20,7 @@
 ```text
 2023级人工智能专业第6学期有哪些选修课？
 2024级网络空间安全专业的专业选修模块最低要修多少学分？
-离散数学多少学分，在哪个学期开设？
+2024级人工智能专业的离散数学多少学分，在哪个学期开设？
 大学英语达到什么条件可以免修？
 我已经修完这些课程，还差多少专业选修学分？
 ```
@@ -71,12 +71,12 @@ flowchart LR
 ```powershell
 git clone https://github.com/ZorIgn/swufe-rag.git
 cd swufe-rag
-uv sync --extra dev
+uv sync --locked --extra dev --extra retrieval
 ```
 
 ### 2. 准备数据并构建数据库
 
-从项目数据发布目录或显式 URL 准备 `sources.csv`、`chunks.jsonl` 和 `curriculum_catalog.json`。代码仓库不包含生成数据；没有数据目录时，需要先取得项目数据包：
+从项目数据发布目录或显式 URL 准备 `sources.csv`、`chunks.jsonl`、`curriculum_catalog.json`、`source_review.csv` 和 `evidence_review.csv`；两个审核账本用于管理可进入回答链路的可信证据。代码仓库不包含生成数据；没有数据目录时，需要先取得项目数据包：
 
 ```powershell
 python -m scripts.download_dataset --source-dir <released-data-directory>
@@ -85,7 +85,7 @@ python -m scripts.build_all
 python -m scripts.verify_dataset --allow-review-required-requirements
 ```
 
-`--allow-review-required-requirements` 只允许带有 `review_required` 标记的培养要求出现在清单中；这些记录仍不会被回答逻辑当作已确认事实。构建结果默认位于 `data/academic.sqlite3` 和 `artifacts/manifests/`。如果只运行离线结构化测试，可以直接使用仓库中的 `tests/canonical/data/` 小型数据夹具。
+`--allow-review-required-requirements` 只允许带有 `review_required` 标记的培养要求出现在清单中；这些记录仍不会被回答逻辑当作已确认事实。构建结果默认位于 `data/academic.sqlite3`、`artifacts/retrieval/<dataset_version>/` 和 `artifacts/manifests/`，运行时会校验版本、顺序、维度与产物哈希。离线结构化测试可显式设置 `SWUFE_RETRIEVAL_MODE=lexical`，并使用 `tests/canonical/data/` 小型夹具。
 
 ### 3. 启动服务
 
@@ -133,10 +133,12 @@ MCP 客户端可通过 `agent.mcp.MCPAdapter` 使用同一组类型化工具，H
 
 ```powershell
 python -m pytest -q tests/canonical
-python -m eval.run_generalization --database data/academic.sqlite3
+python -m eval.run_generalization --database data/academic.sqlite3 --retrieval-mode lexical
+python -m eval.run_product_smoke --database data/academic.sqlite3 --retrieval-mode lexical
+python -m eval.run_retrieval_ablation --documents eval/dev/retrieval_documents.jsonl --queries eval/dev/retrieval_queries.json --variants lexical hybrid --dataset-version 2.0
 ```
 
-Canonical 测试覆盖实体归一化、工具规划、SQLite 操作、来源版本与冲突、证据覆盖、声明绑定、API/MCP 契约、BYOK 安全和提示注入。需要完整检索模型时，可另外运行 `eval/run_retrieval_ablation.py`；其报告写入 `eval/reports/`。
+Canonical 测试覆盖实体归一化、工具规划、SQLite 操作、来源版本与冲突、证据覆盖、声明绑定、API/MCP 契约、BYOK 安全和提示注入。检索消融可同时报告 lexical 与 artifact-backed hybrid 指标，结果写入 `eval/reports/`。
 
 ## 数据更新
 

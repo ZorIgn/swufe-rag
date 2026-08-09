@@ -1,14 +1,71 @@
 [
   {
+    "id": "dev-readme-single-course",
+    "intent": "course_detail",
+    "question": "2024级测试专业X（TST101）是多少学分？",
+    "expected_tools": ["get_course_detail"],
+    "expected_answer_contains": ["测试算法", "TST101", "3 学分"],
+    "expected_safe_rejection": false
+  },
+  {
     "id": "dev-course-list",
     "intent": "course_query",
     "question": "2024级测试专业X第1学期有哪些选修课？",
-    "expected_tools": ["list_courses"]
+    "expected_tools": ["list_courses"],
+    "expected_answer_contains": ["测试算法", "TST101"],
+    "expected_safe_rejection": false
   },
   {
-    "id": "dev-course-detail",
-    "intent": "course_detail",
-    "question": "2024级测试专业X（TST101）是多少学分？",
-    "expected_tools": ["get_course_detail"]
+    "id": "dev-module-credits",
+    "intent": "module_requirements",
+    "question": "2024级测试专业X专业选修课最低要修多少学分？",
+    "expected_tools": ["get_module_requirements"],
+    "expected_answer_contains": ["专业选修课", "3 学分"],
+    "expected_safe_rejection": false
+  },
+  {
+    "id": "dev-policy",
+    "intent": "policy",
+    "question": "测试学院转专业有什么规定？",
+    "expected_tools": ["retrieve_policy"],
+    "expected_answer_contains": ["学生申请转专业应提交材料"],
+    "expected_safe_rejection": false
+  },
+  {
+    "id": "dev-audit",
+    "intent": "progress_audit",
+    "question": "2024级测试专业X已修完TST101，专业选修还差多少学分？",
+    "expected_tools": ["get_graduation_requirements", "audit_completed_courses"],
+    "expected_answer_contains": ["专业选修课", "尚差 0 学分"],
+    "expected_safe_rejection": false
+  },
+  {
+    "id": "dev-feasibility",
+    "intent": "course_planning",
+    "question": "2024级测试专业X已修TST101，能在第1学期前修完并毕业吗？",
+    "expected_tools": [
+      "get_graduation_requirements",
+      "audit_completed_courses",
+      "list_courses_before_semester",
+      "list_unavoidable_courses",
+      "check_curriculum_feasibility",
+      "list_courses"
+    ],
+    "expected_safe_rejection": false
+  },
+  {
+    "id": "dev-compare",
+    "intent": "compare_programs",
+    "question": "2024级测试专业X和测试专业Y有什么区别？",
+    "expected_tools": ["compare_programs"],
+    "expected_answer_contains": ["测试专业X独有课程：TST101", "测试专业Y独有课程：TST201"],
+    "expected_safe_rejection": false
+  },
+  {
+    "id": "dev-out-of-corpus-rejection",
+    "intent": "general",
+    "question": "火星大学量子魔法专业第1学期有哪些课？",
+    "expected_tools": [],
+    "expected_safe_rejection": true
   }
 ]

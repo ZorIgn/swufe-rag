@@ -9,6 +9,10 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      # Unit/eval fixtures intentionally exercise the explicit offline fallback;
+      # the separate hybrid and image jobs verify the production path.
+      SWUFE_RETRIEVAL_MODE: lexical
     strategy:
       matrix:
         python-version: ["3.10", "3.12"]
@@ -17,64 +21,85 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.33"
+          enable-cache: true
       - name: Install canonical development dependencies
-        run: python -m pip install -e ".[dev]"
+        run: uv sync --locked --extra dev
       - name: Lint
         run: >-
-          python -m ruff check
+          uv run --no-sync python -m ruff check
           agent academic app evidence generation ingest query retrieval storage
           scripts eval tests/canonical
       - name: Type check
-        run: python -m mypy agent academic app evidence query generation retrieval storage
+        # Optional FAISS, transformer, and BM25 packages are covered by the
+        # narrow third-party overrides in pyproject.toml; our own modules stay
+        # fully type checked here.
+        run: >-
+          uv run --no-sync python -m mypy
+          agent academic app evidence query generation retrieval storage eval
       - name: Compile canonical sources
         run: >-
-          python -m compileall -q
+          uv run --no-sync python -m compileall -q
           agent academic app evidence generation ingest query retrieval storage
           scripts eval tests/canonical
       - name: Build versioned CI data fixture
         run: >-
-          python -m scripts.build_all
+          uv run --no-sync python -m scripts.build_all
           --database "$RUNNER_TEMP/academic.sqlite3"
           --catalog tests/canonical/data/catalog.json
           --sources tests/canonical/data/sources.csv
           --chunks tests/canonical/data/chunks.jsonl
           --aliases tests/canonical/data/aliases.json
+          --source-review tests/canonical/data/source_review.csv
+          --evidence-review tests/canonical/data/evidence_review.csv
           --manifest-dir "$RUNNER_TEMP/manifests"
           --retrieval-root "$RUNNER_TEMP/retrieval"
           --retrieval-mode lexical
       - name: Verify CI data fixture
-        run: python -m scripts.verify_dataset --database "$RUNNER_TEMP/academic.sqlite3"
+        run: uv run --no-sync python -m scripts.verify_dataset --database "$RUNNER_TEMP/academic.sqlite3"
       - name: Planning smoke
-        run: python -m pytest -q tests/canonical/test_runtime.py -k three_operation_sql_rag_composite_plan
+        run: uv run --no-sync python -m pytest -q tests/canonical/test_runtime.py -k three_operation_sql_rag_composite_plan
       - name: BM25 lexical smoke
-        run: python -m pytest -q tests/canonical/test_runtime.py -k policy_retrieval_is_composed_from_registry
+        run: uv run --no-sync python -m pytest -q tests/canonical/test_runtime.py -k policy_retrieval_is_composed_from_registry
+      - name: Hybrid dense fusion and rerank contract smoke
+        # Deterministic doubles exercise dense ranking, RRF fusion, reranking,
+        # and MMR without downloading remote model weights.
+        run: uv run --no-sync python -m pytest -q tests/canonical/test_hybrid_smoke.py
       - name: Trust and claim gate smoke
         run: >-
-          python -m pytest -q
+          uv run --no-sync python -m pytest -q
           tests/canonical/test_policy_conflicts_and_claims.py
           tests/canonical/test_claim_semantics.py
       - name: Dependency failure and timeout smoke
-        run: python -m pytest -q tests/canonical/test_plan_executor.py
+        run: uv run --no-sync python -m pytest -q tests/canonical/test_plan_executor.py
       - name: Offline agent evaluation regression
         run: >-
-          python -m eval.run_agent_eval
+          uv run --no-sync python -m eval.run_agent_eval
           --database "$RUNNER_TEMP/academic.sqlite3"
           --questions eval/dev/queries.json
           --output "$RUNNER_TEMP/agent-eval.json"
       - name: Generalization smoke
-        run: python -m eval.run_generalization --database "$RUNNER_TEMP/academic.sqlite3" --samples 2
+        run: >-
+          uv run --no-sync python -m eval.run_generalization
+          --database "$RUNNER_TEMP/academic.sqlite3" --samples 2
       - name: Unit and contract tests
         env:
           PYTHONUTF8: "1"
           HF_HUB_OFFLINE: "1"
           TRANSFORMERS_OFFLINE: "1"
         run: >-
-          python -m pytest -q tests/canonical
+          uv run --no-sync python -m pytest -q tests/canonical
           --cov=agent --cov=academic --cov=query --cov=evidence
           --cov=generation --cov=app --cov-fail-under=50
   docker:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Docker build
+      - name: Build full hybrid runtime image
         run: docker build -t swufe-rag:ci .
+      - name: Verify hybrid runtime dependencies are present
+        run: >-
+          docker run --rm --entrypoint python swufe-rag:ci -c
+          "import os; import faiss; from sentence_transformers import CrossEncoder, SentenceTransformer; assert os.environ['SWUFE_RETRIEVAL_MODE'] == 'hybrid'; print('hybrid runtime dependencies available')"

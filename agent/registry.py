@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Generic, TypeVar, cast
+from typing import Generic, Protocol, TypeVar, cast
 
 from evidence.models import EvidencePacket
 from query.schemas import Operation
@@ -13,12 +13,26 @@ T = TypeVar("T", bound=Operation, contravariant=True)
 
 
 @dataclass(frozen=True)
+class ToolExecutionContext:
+    """Evidence already produced by the successful ancestors of an operation."""
+
+    plan_id: str
+    operation_id: str
+    prior_packets: tuple[EvidencePacket, ...]
+    dependency_packets: tuple[EvidencePacket, ...]
+
+
+class ContextualTool(Protocol[T]):
+    def __call__(self, operation: T, *, context: ToolExecutionContext) -> EvidencePacket: ...
+
+
+@dataclass(frozen=True)
 class RegisteredTool(Generic[T]):
     name: str
     operation_type: str
     read_only: bool
     timeout_seconds: float
-    execute: Callable[[T], EvidencePacket]
+    execute: Callable[[T], EvidencePacket] | ContextualTool[T]
 
 
 class ToolRegistry:

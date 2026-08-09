@@ -170,6 +170,36 @@ def _repository(tmp_path: Path) -> AcademicRepository:
     return AcademicRepository(path)
 
 
+def test_program_detection_does_not_treat_course_wording_as_a_major(tmp_path: Path) -> None:
+    database = _build(
+        tmp_path,
+        sources=[_source("英语培养方案", "2024", "外国语学院", "english.pdf")],
+        catalog={
+            "catalog_version": "program-detection",
+            "plans": [
+                {
+                    "college": "外国语学院",
+                    "cohort": "2024",
+                    "major": "英语专业",
+                    "source_title": "英语培养方案",
+                    "modules": [],
+                }
+            ],
+            "courses": [],
+        },
+        chunks=[],
+    )
+    repository = AcademicRepository(database)
+    try:
+        assert repository.programs_in_text("大学英语达到什么条件可以免修？", 2024) == ()
+        assert tuple(
+            item.canonical_name
+            for item in repository.programs_in_text("2024级英语专业培养方案", 2024)
+        ) == ("英语专业",)
+    finally:
+        repository.close()
+
+
 def test_source_lookup_requires_exact_scope_or_unlimited(tmp_path: Path) -> None:
     catalog = {
         "catalog_version": "scope-test",

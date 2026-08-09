@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from datetime import date, datetime
 from time import perf_counter
+from typing import SupportsFloat, SupportsIndex
 
 import numpy as np
 
@@ -13,6 +14,32 @@ from retrieval.lexical import BM25LexicalIndex, tokenize
 from retrieval.models import PolicyRetrievalRequest, PolicyRetrievalResult
 from retrieval.reranker import CrossEncoderReranker
 from retrieval.scoring import RetrievedCandidate, presentation_score, reciprocal_rank_fusion
+
+
+def _string_values(value: object) -> tuple[str, ...]:
+    """Narrow a JSON-like iterable while retaining legacy iterable semantics."""
+
+    values = value or ()
+    if not isinstance(values, Iterable):
+        raise TypeError(f"expected an iterable policy metadata value, got {values!r}")
+    return tuple(str(item) for item in values)
+
+
+def _float_or_zero(value: object) -> float:
+    """Mirror ``float(value or 0)`` after narrowing an untyped metadata field."""
+
+    candidate = value or 0
+    if isinstance(candidate, (str, bytes, bytearray, int, float)):
+        return float(candidate)
+    if isinstance(candidate, SupportsFloat):
+        return float(candidate)
+    if isinstance(candidate, SupportsIndex):
+        return float(candidate)
+    raise TypeError(f"policy numeric value is not convertible to float: {candidate!r}")
+
+
+def _authority_score(metadata: dict[str, object]) -> float:
+    return min(1.0, _float_or_zero(metadata.get("authority_level")) / 3.0)
 
 
 def _as_date(value: object) -> date | None:
@@ -54,9 +81,9 @@ def _scope_match(document: dict[str, object], request: PolicyRetrievalRequest) -
     if request.cohort is not None and cohort not in {"不限", str(request.cohort)}:
         return False
     college = str(document.get("college_id") or "")
-    if request.college_ids and college not in {"", "校级", *request.college_ids}:
+    if request.college_ids and college not in {"", "校级", "全校", *request.college_ids}:
         return False
-    scoped_programs = tuple(str(value) for value in document.get("program_ids", ()) or ())
+    scoped_programs = _string_values(document.get("program_ids", ()))
     if (
         scoped_programs
         and request.program_ids
@@ -66,7 +93,7 @@ def _scope_match(document: dict[str, object], request: PolicyRetrievalRequest) -
     if not request.topics:
         return True
     requested_topics = {value.lower() for value in request.topics}
-    topics = {str(value).lower() for value in document.get("topics", ()) or ()}
+    topics = {value.lower() for value in _string_values(document.get("topics", ()))}
     if topics:
         return bool(requested_topics.intersection(topics))
     haystack = " ".join(
@@ -101,6 +128,7 @@ class HybridPolicyRetriever:
         index_version: str | None = None,
         expected_chunk_ids: tuple[str, ...] | None = None,
         expected_dimension: int | None = None,
+        reranker_min_score: float = 0.50,
         metric_sink: Callable[..., None] | None = None,
     ) -> None:
         if mode not in {"lexical", "hybrid"}:
@@ -114,6 +142,7 @@ class HybridPolicyRetriever:
         self._reranker = reranker
         self._expected_chunk_ids = expected_chunk_ids
         self._expected_dimension = expected_dimension
+        self._reranker_min_score = reranker_min_score
         self._metric_sink = metric_sink
 
     def _emit(self, name: str, value: float = 1.0, **attributes: object) -> None:
@@ -143,10 +172,12 @@ class HybridPolicyRetriever:
             if self.index_version != self.dataset_version:
                 reasons.append("retrieval_dataset_version_mismatch")
             if self._dense is not None:
-                if set(self._dense.chunk_ids) != set(self._documents):
+                document_ids = tuple(self._documents)
+                if self._dense.chunk_ids != document_ids:
                     reasons.append("retrieval_index_chunk_ids_mismatch")
-                if self._expected_chunk_ids is not None and set(self._expected_chunk_ids) != set(
-                    self._documents
+                if (
+                    self._expected_chunk_ids is not None
+                    and self._expected_chunk_ids != document_ids
                 ):
                     reasons.append("retrieval_manifest_chunk_ids_mismatch")
                 if (
@@ -190,20 +221,21 @@ class HybridPolicyRetriever:
     def _mmr(
         self, candidates: tuple[RetrievedCandidate, ...], *, limit: int
     ) -> tuple[RetrievedCandidate, ...]:
-        if self._dense is None:
+        dense = self._dense
+        if dense is None:
             return candidates[:limit]
         remaining = list(candidates)
         selected: list[RetrievedCandidate] = []
         while remaining and len(selected) < limit:
 
             def score(candidate: RetrievedCandidate) -> tuple[float, str]:
-                vector = self._dense.vector_for(candidate.chunk_id)
+                vector = dense.vector_for(candidate.chunk_id)
                 diversity = 0.0
                 if vector is not None and selected:
                     diversity = max(
                         float(np.dot(vector, selected_vector))
                         for selected_vector in (
-                            self._dense.vector_for(item.chunk_id) for item in selected
+                            dense.vector_for(item.chunk_id) for item in selected
                         )
                         if selected_vector is not None
                     )
@@ -226,7 +258,7 @@ class HybridPolicyRetriever:
         verified, review = self._scoped(request)
         review_candidates = self._rank_review(request, review)
         if not verified:
-            warnings = ("policy_verified_evidence_unavailable",)
+            warnings: tuple[str, ...] = ("policy_verified_evidence_unavailable",)
             if review_candidates:
                 warnings += ("policy_review_candidates_available",)
             return PolicyRetrievalResult(
@@ -249,9 +281,7 @@ class HybridPolicyRetriever:
                         "fused_rank": item.lexical_rank,
                         "exact_entity_score": _exact_entity_score(request.query, item.metadata),
                         "scope_score": 1.0,
-                        "authority_score": min(
-                            1.0, float(item.metadata.get("authority_level") or 0) / 3.0
-                        ),
+                        "authority_score": _authority_score(item.metadata),
                     }
                 )
                 for item in lexical[: request.top_k]
@@ -274,9 +304,17 @@ class HybridPolicyRetriever:
                 candidates=ranked,
                 review_candidates=review_candidates,
                 scope_filtered_count=len(verified) + len(review),
-                candidate_count=len(verified),
+                candidate_count=len(ranked),
                 retrieval_mode=self.mode,
-                warnings=("lexical_mode",) if review_candidates else (),
+                warnings=tuple(
+                    value
+                    for value, include in (
+                        ("lexical_mode", True),
+                        ("policy_review_candidates_available", bool(review_candidates)),
+                        ("policy_no_relevant_candidates", not ranked),
+                    )
+                    if include
+                ),
             )
         if self._dense is None or self._reranker is None:
             raise DenseUnavailableError("hybrid policy retrieval is not ready")
@@ -311,14 +349,18 @@ class HybridPolicyRetriever:
                         "fused_rank": rank,
                         "exact_entity_score": _exact_entity_score(request.query, source.metadata),
                         "scope_score": 1.0,
-                        "authority_score": min(
-                            1.0, float(source.metadata.get("authority_level") or 0) / 3.0
-                        ),
+                        "authority_score": _authority_score(source.metadata),
                     }
                 )
             )
         reranked = self._reranker.rerank(request.query, fused)
-        diversified = self._mmr(reranked, limit=request.top_k)
+        relevant = tuple(
+            item
+            for item in reranked
+            if item.reranker_score is not None
+            and item.reranker_score >= self._reranker_min_score
+        )
+        diversified = self._mmr(relevant, limit=request.top_k)
         values = tuple(
             item.model_copy(
                 update={
@@ -337,9 +379,16 @@ class HybridPolicyRetriever:
             candidates=values,
             review_candidates=review_candidates,
             scope_filtered_count=len(verified) + len(review),
-            candidate_count=len(verified),
+            candidate_count=len(values),
             retrieval_mode=self.mode,
-            warnings=("policy_review_candidates_available",) if review_candidates else (),
+            warnings=tuple(
+                value
+                for value, include in (
+                    ("policy_review_candidates_available", bool(review_candidates)),
+                    ("policy_no_relevant_candidates", not values),
+                )
+                if include
+            ),
         )
 
 

@@ -59,8 +59,10 @@ def _deadline_semester(question: str) -> int | None:
     stage = DEADLINE_STAGE_RE.search(question)
     if stage is None:
         return None
-    # "大四前" means the end of the preceding academic year (semester 6).
-    return max(1, (_stage_number(stage.group(1)) - 1) * 2)
+    # Planning treats the deadline as the first semester that is no longer
+    # available.  Therefore "大四前" allows semesters 1..6 and has the
+    # exclusive boundary 7 (the first semester of senior year).
+    return max(1, (_stage_number(stage.group(1)) - 1) * 2 + 1)
 
 
 def _requested_outputs(

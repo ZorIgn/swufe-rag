@@ -17,7 +17,7 @@ def main() -> None:
     parser.add_argument(
         "--mode",
         choices=("lexical", "hybrid"),
-        default=os.getenv("SWUFE_RETRIEVAL_MODE", "lexical"),
+        default=os.getenv("SWUFE_RETRIEVAL_MODE", "hybrid"),
     )
     parser.add_argument(
         "--embedding-model", default=os.getenv("SWUFE_EMBEDDING_MODEL", "BAAI/bge-base-zh-v1.5")
@@ -32,7 +32,9 @@ def main() -> None:
         result = build_retrieval_index(
             list(repository.retrieval_documents()),
             dataset_version=metadata.get("dataset_version", "unknown"),
-            source_hash=metadata.get("chunks_sha256", ""),
+            source_hash=metadata.get(
+                "evidence_state_sha256", metadata.get("chunks_sha256", "")
+            ),
             output_root=args.output_root,
             mode=args.mode,
             embedding_model=args.embedding_model,

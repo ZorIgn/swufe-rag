@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from pathlib import Path
+from typing import Protocol, cast
 
 import numpy as np
 
@@ -14,6 +15,40 @@ class DenseUnavailableError(RuntimeError):
     """Raised when hybrid mode lacks its required dense dependencies/artifacts."""
 
 
+class _FaissIndex(Protocol):
+    d: int
+    ntotal: int
+
+    def add(self, vectors: np.ndarray) -> None: ...
+
+    def search(self, vectors: np.ndarray, limit: int) -> tuple[np.ndarray, np.ndarray]: ...
+
+
+class _FaissModule(Protocol):
+    def IndexFlatIP(self, dimension: int) -> _FaissIndex: ...
+
+    def read_index(self, path: str) -> _FaissIndex: ...
+
+    def write_index(self, index: _FaissIndex, path: str) -> None: ...
+
+
+class _SentenceEncoder(Protocol):
+    def encode(
+        self,
+        sentences: list[str],
+        *,
+        batch_size: int | None = None,
+        normalize_embeddings: bool = False,
+        show_progress_bar: bool = False,
+    ) -> object: ...
+
+
+class _SentenceTransformerFactory(Protocol):
+    def __call__(
+        self, model_name: str, *, local_files_only: bool = False
+    ) -> _SentenceEncoder: ...
+
+
 class DenseFaissIndex:
     """A normalized-vector FAISS index with stable chunk-id alignment."""
 
@@ -22,8 +57,8 @@ class DenseFaissIndex:
         *,
         model_name: str,
         chunk_ids: tuple[str, ...],
-        index: object,
-        encoder: object,
+        index: _FaissIndex,
+        encoder: _SentenceEncoder,
         dimension: int,
         vectors: np.ndarray,
     ) -> None:
@@ -36,7 +71,7 @@ class DenseFaissIndex:
         self._positions = {identifier: index for index, identifier in enumerate(chunk_ids)}
 
     @staticmethod
-    def _dependencies() -> tuple[object, object]:
+    def _dependencies() -> tuple[_FaissModule, _SentenceTransformerFactory]:
         try:
             import faiss
             from sentence_transformers import SentenceTransformer
@@ -44,7 +79,9 @@ class DenseFaissIndex:
             raise DenseUnavailableError(
                 "hybrid retrieval requires `uv sync --extra retrieval`"
             ) from exc
-        return faiss, SentenceTransformer
+        # These optional packages do not provide complete stubs.  Constrain
+        # them to the small, runtime-verified surface consumed by this index.
+        return cast(_FaissModule, faiss), cast(_SentenceTransformerFactory, SentenceTransformer)
 
     @classmethod
     def build(
@@ -56,7 +93,12 @@ class DenseFaissIndex:
     ) -> tuple[DenseFaissIndex, np.ndarray]:
         faiss, sentence_transformer = cls._dependencies()
         values = tuple(dict(item) for item in documents)
-        encoder = sentence_transformer(model_name)
+        try:
+            encoder = sentence_transformer(model_name, local_files_only=True)
+        except OSError as exc:
+            raise DenseUnavailableError(
+                f"local embedding model is unavailable: {model_name}"
+            ) from exc
         embeddings = np.asarray(
             encoder.encode(
                 [str(item.get("text", "")) for item in values],
@@ -88,13 +130,24 @@ class DenseFaissIndex:
         import json
 
         chunk_ids = tuple(json.loads((directory / "doc_ids.json").read_text(encoding="utf-8")))
+        if not chunk_ids or len(set(chunk_ids)) != len(chunk_ids):
+            raise DenseUnavailableError("dense document ids are empty or duplicated")
         index = faiss.read_index(str(directory / "faiss.index"))
-        vectors = np.load(directory / "vectors.npy")
+        vectors = np.load(directory / "vectors.npy", allow_pickle=False)
         if int(index.d) != dimension:
             raise DenseUnavailableError("FAISS dimension does not match retrieval manifest")
+        if int(index.ntotal) != len(chunk_ids):
+            raise DenseUnavailableError("FAISS row count does not match dense document ids")
         if vectors.shape != (len(chunk_ids), dimension):
             raise DenseUnavailableError("dense vectors do not match retrieval manifest")
-        encoder = sentence_transformer(model_name)
+        if not np.isfinite(vectors).all():
+            raise DenseUnavailableError("dense vectors contain non-finite values")
+        try:
+            encoder = sentence_transformer(model_name, local_files_only=True)
+        except OSError as exc:
+            raise DenseUnavailableError(
+                f"local embedding model is unavailable: {model_name}"
+            ) from exc
         return cls(
             model_name=model_name,
             chunk_ids=chunk_ids,

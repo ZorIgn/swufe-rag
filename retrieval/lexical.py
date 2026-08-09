@@ -49,12 +49,43 @@ except ImportError:  # pragma: no cover - dependency-light offline fixtures
 from retrieval.scoring import RetrievedCandidate
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9]+|[\u3400-\u9fff]")
+_MEANINGFUL_RE = re.compile(r"[A-Za-z0-9]+|[\u3400-\u9fff]+")
+_GENERIC_QUERY_TERMS = frozenset(
+    {
+        "什么",
+        "哪些",
+        "怎么",
+        "如何",
+        "是否",
+        "可以",
+        "规定",
+        "办法",
+        "条件",
+        "要求",
+        "说明",
+        "相关",
+    }
+)
 
 
 def tokenize(text: str) -> list[str]:
-    """Use CJK characters plus alphanumeric spans as stable BM25 terms."""
+    """Use CJK characters plus alphanumeric spans for the compact BM25 index."""
 
     return [value.lower() for value in _TOKEN_RE.findall(text) if value.strip()]
+
+
+def _meaningful_terms(text: str) -> set[str]:
+    cleaned = text
+    for generic in sorted(_GENERIC_QUERY_TERMS, key=len, reverse=True):
+        cleaned = cleaned.replace(generic, " ")
+    values: set[str] = set()
+    for value in _MEANINGFUL_RE.findall(cleaned):
+        if all("\u3400" <= character <= "\u9fff" for character in value):
+            if len(value) >= 2:
+                values.update(value[index : index + 2] for index in range(len(value) - 1))
+        else:
+            values.add(value.lower())
+    return values - _GENERIC_QUERY_TERMS
 
 
 class BM25LexicalIndex:
@@ -64,24 +95,47 @@ class BM25LexicalIndex:
         self._documents = tuple(dict(item) for item in documents)
         self._ids = tuple(str(item["chunk_id"]) for item in self._documents)
         self._positions = {identifier: index for index, identifier in enumerate(self._ids)}
-        self._bm25 = BM25Okapi([tokenize(str(item.get("text", ""))) for item in self._documents])
+        self._bm25 = (
+            BM25Okapi([tokenize(str(item.get("text", ""))) for item in self._documents])
+            if self._documents
+            else None
+        )
 
     @property
     def documents(self) -> tuple[dict[str, object], ...]:
         return self._documents
 
     def rank(
-        self, query: str, candidate_ids: Iterable[str], *, limit: int
+        self,
+        query: str,
+        candidate_ids: Iterable[str],
+        *,
+        limit: int,
+        min_score: float | None = None,
     ) -> tuple[RetrievedCandidate, ...]:
         ids = tuple(candidate_ids)
-        if not ids:
+        if not ids or self._bm25 is None:
+            return ()
+        query_terms = _meaningful_terms(query)
+        if not query_terms:
             return ()
         scores = self._bm25.get_scores(tokenize(query))
         values: list[tuple[str, float]] = []
         for identifier in ids:
             position = self._positions.get(identifier)
             if position is not None:
-                values.append((identifier, float(scores[position])))
+                score = float(scores[position])
+                # BM25 libraries return a score for every document.  A zero
+                # score means the query shares no lexical evidence with that
+                # document and must not be promoted merely because it has a
+                # good scope/authority prior later in the pipeline.
+                document_terms = _meaningful_terms(
+                    str(self._documents[position].get("text", ""))
+                )
+                overlap = len(query_terms.intersection(document_terms))
+                score_is_relevant = score != 0.0 if min_score is None else score > min_score
+                if score_is_relevant and overlap >= 1:
+                    values.append((identifier, score))
         values.sort(key=lambda item: (-item[1], item[0]))
         candidates: list[RetrievedCandidate] = []
         for rank, (identifier, score) in enumerate(values[:limit], start=1):

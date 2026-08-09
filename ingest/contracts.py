@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import re
-from typing import Any, TypedDict
+from typing import Any, Literal, TypedDict
 from urllib.parse import urlparse
 
-CONTRACT_VERSION = "1.0"
+CONTRACT_VERSION = "1.1"
+REVIEW_STATUSES = frozenset({"verified", "review_required", "unverified"})
 
 
 class ContractError(ValueError):
@@ -59,6 +60,7 @@ class KnowledgeChunk(TypedDict):
     page_url: str
     file_url: str
     is_table: bool
+    review_status: Literal["verified", "review_required", "unverified"]
 
 
 class RetrievedChunk(KnowledgeChunk):
@@ -94,6 +96,7 @@ CHUNK_FIELDS = (
     "page_url",
     "file_url",
     "is_table",
+    "review_status",
 )
 RETRIEVED_CHUNK_FIELDS = CHUNK_FIELDS + ("score",)
 CITATION_FIELDS = (
@@ -219,6 +222,15 @@ def validate_chunk(raw: Any, *, line_number: int | None = None) -> KnowledgeChun
             **_context(raw, line_number),
         )
     result["is_table"] = is_table
+
+    review_status = _require_nonempty_string(raw, "review_status", line_number=line_number)
+    if review_status not in REVIEW_STATUSES:
+        raise ContractError(
+            "must be one of: verified, review_required, unverified",
+            field="review_status",
+            **_context(raw, line_number),
+        )
+    result["review_status"] = review_status
     return result  # type: ignore[return-value]
 
 
@@ -252,4 +264,3 @@ def validate_answer_result(raw: Any) -> AnswerResult:
             raise ContractError(f"citation {index} must be a dictionary")
         _require_exact_keys(citation, CITATION_FIELDS)
     return raw  # type: ignore[return-value]
-

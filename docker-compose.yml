@@ -5,10 +5,14 @@ services:
       - "8000:8000"
     environment:
       SWUFE_ACADEMIC_DATABASE: /app/data/academic.sqlite3
+      SWUFE_RETRIEVAL_MODE: hybrid
+      SWUFE_RETRIEVAL_ARTIFACT_ROOT: /app/artifacts/retrieval
+      HF_HOME: /models
       SWUFE_CORS_ALLOW_ORIGINS: ${SWUFE_CORS_ALLOW_ORIGINS:-}
     volumes:
       - ./data:/app/data:ro
-      - ./artifacts:/app/artifacts
+      - ./artifacts:/app/artifacts:ro
+      - ./models:/models:ro
     profiles: ["cpu"]
   academic-agent-gpu:
     build: .
@@ -16,9 +20,13 @@ services:
       - "8001:8000"
     environment:
       SWUFE_ACADEMIC_DATABASE: /app/data/academic.sqlite3
+      SWUFE_RETRIEVAL_MODE: hybrid
+      SWUFE_RETRIEVAL_ARTIFACT_ROOT: /app/artifacts/retrieval
+      HF_HOME: /models
     volumes:
       - ./data:/app/data:ro
-      - ./artifacts:/app/artifacts
+      - ./artifacts:/app/artifacts:ro
+      - ./models:/models:ro
     deploy:
       resources:
         reservations:

@@ -8,11 +8,29 @@ need an explicitly lexical baseline, rather than a character-count surrogate.
 from __future__ import annotations
 
 from collections import OrderedDict
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from typing import SupportsFloat, SupportsIndex
 
 from retrieval.lexical import BM25LexicalIndex
 from retrieval.scoring import RetrievedCandidate, presentation_score, reciprocal_rank_fusion
+
+
+def _float_or_zero(value: object) -> float:
+    """Mirror ``float(value or 0)`` after narrowing an untyped metadata field."""
+
+    candidate = value or 0
+    if isinstance(candidate, (str, bytes, bytearray, int, float)):
+        return float(candidate)
+    if isinstance(candidate, SupportsFloat):
+        return float(candidate)
+    if isinstance(candidate, SupportsIndex):
+        return float(candidate)
+    raise TypeError(f"metadata numeric value is not convertible to float: {candidate!r}")
+
+
+def _authority_score(metadata: Mapping[str, object]) -> float:
+    return min(1.0, _float_or_zero(metadata.get("authority_level")) / 3.0)
 
 
 @dataclass
@@ -93,16 +111,12 @@ class ScopedRetriever:
                     "rrf_score": rrf[item.chunk_id],
                     "fused_rank": item.lexical_rank,
                     "scope_score": 1.0 if requested_scope else 0.5,
-                    "authority_score": min(
-                        1.0, float(item.metadata.get("authority_level") or 0) / 3.0
-                    ),
+                    "authority_score": _authority_score(item.metadata),
                     "final_score": presentation_score(
                         fused_rank=item.lexical_rank,
                         total=max(1, len(lexical)),
                         reranker_score=None,
-                        authority_score=min(
-                            1.0, float(item.metadata.get("authority_level") or 0) / 3.0
-                        ),
+                        authority_score=_authority_score(item.metadata),
                         scope_score=1.0 if requested_scope else 0.5,
                     ),
                 }

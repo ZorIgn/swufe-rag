@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from agent.orchestrator import AgentRuntime
+from agent.state import AgentState
 from evidence.models import FinalAnswer
 from query.context import RequestContext
 
@@ -14,7 +15,7 @@ def audit(
     major: str,
     completed_courses: tuple[str, ...] = (),
     session_id: str | None = None,
-) -> tuple[FinalAnswer, object]:
+) -> tuple[FinalAnswer, AgentState]:
     """Resolve every completed course before the normal planner runs."""
 
     context = RequestContext(

@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from hashlib import sha256
+from typing import Literal
 from urllib.parse import urlsplit, urlunsplit
 
 from ingest.contracts import KnowledgeChunk, validate_chunk
@@ -26,6 +27,10 @@ _INLINE_BOUNDARY_RE = re.compile(
     rf"(?<=[。！？；;])(?=第[{_NUMERALS}]+(?:条|章|节))"
 )
 _SENTENCE_RE = re.compile(r".*?(?:[。！？；;]|\n+|$)", re.S)
+
+# Parsing creates traceable evidence, but it is not a human verification step.
+# A reviewer-owned ledger is the only path that may later promote a chunk.
+GENERATED_REVIEW_STATUS: Literal["review_required"] = "review_required"
 
 
 @dataclass(frozen=True)
@@ -242,6 +247,7 @@ def build_chunks(
                 "page_url": _page_url(source, segment.page),
                 "file_url": source.file_url,
                 "is_table": segment.is_table,
+                "review_status": GENERATED_REVIEW_STATUS,
             }
             chunks.append(validate_chunk(chunk))
     if not chunks:

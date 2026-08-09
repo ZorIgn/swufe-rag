@@ -81,7 +81,65 @@ class DeterministicSynthesizer:
         for value in packet.facts:
             by_subject[value.subject].append(value)
         claims: list[ClaimSpan] = []
-        if query.intent in {"course_query", "course_detail"}:
+        composite_outputs = {
+            "module_requirements",
+            "course_list",
+            "policy_explanation",
+        }
+        if composite_outputs.issubset(query.requested_outputs):
+            for fact in packet.facts:
+                if (
+                    fact.type == "requirement"
+                    and fact.predicate == "required_credits"
+                    and isinstance(fact.value, (int, float))
+                ):
+                    claims.append(
+                        _claim(
+                            f"{fact.subject}最低要求为 {fact.value:g} 学分。",
+                            [fact],
+                            f"claim-{len(claims) + 1}",
+                        )
+                    )
+            course_groups: dict[str, list[Fact]] = defaultdict(list)
+            for fact in packet.facts:
+                if fact.type == "course":
+                    course_groups[fact.subject].append(fact)
+            for facts in course_groups.values():
+                data = {fact.predicate: fact for fact in facts}
+                if {"name", "code", "credits", "semester"}.issubset(data):
+                    claims.append(
+                        _claim(
+                            f"{data['name'].value}（{data['code'].value}）："
+                            f"{data['credits'].value:g} 学分，第 {data['semester'].value} 学期开设。",
+                            [
+                                data[key]
+                                for key in ("name", "code", "credits", "semester", "nature", "module")
+                                if key in data
+                            ],
+                            f"claim-{len(claims) + 1}",
+                        )
+                    )
+            policy_fact = next(
+                (
+                    fact
+                    for fact in packet.facts
+                    if fact.type == "policy"
+                    and fact.predicate == "excerpt"
+                    and isinstance(fact.value, str)
+                ),
+                None,
+            )
+            if policy_fact is not None:
+                policy_value = policy_fact.value
+                if isinstance(policy_value, str):
+                    claims.append(
+                        _claim(
+                            policy_value.replace("\n", " ")[:300].strip(),
+                            [policy_fact],
+                            f"claim-{len(claims) + 1}",
+                        )
+                    )
+        elif query.intent in {"course_query", "course_detail"}:
             for _subject, facts in by_subject.items():
                 data = {fact.predicate: fact for fact in facts}
                 if {"name", "code", "credits", "semester"}.issubset(data):
@@ -174,19 +232,56 @@ class DeterministicSynthesizer:
                                 f"claim-{len(claims) + 1}",
                             )
                         )
-        elif query.intent in {"course_planning", "curriculum_feasibility"}:
-            for subject, facts in by_subject.items():
-                values = {fact.predicate: fact for fact in facts}
-                if "remaining_credits" in values:
-                    fact = values["remaining_credits"]
-                    if isinstance(fact.value, (int, float)):
+                    elif (
+                        fact.predicate == "courses_only_in_program"
+                        and isinstance(fact.value, list)
+                        and fact.value
+                    ):
                         claims.append(
                             _claim(
-                                f"{subject}尚差 {fact.value:g} 学分。",
+                                f"{subject}独有课程："
+                                f"{'、'.join(str(value) for value in fact.value)}。",
                                 [fact],
                                 f"claim-{len(claims) + 1}",
                             )
                         )
+        elif query.intent in {"course_planning", "curriculum_feasibility"}:
+            status = next(
+                (fact for fact in packet.facts if fact.predicate == "feasibility_status"),
+                None,
+            )
+            feasibility_reasons = tuple(
+                fact for fact in packet.facts if fact.predicate == "feasibility_reason"
+            )
+            if status is not None:
+                claims.append(
+                    _claim(
+                        f"结论：{status.value}。",
+                        [status],
+                        f"claim-{len(claims) + 1}",
+                    )
+                )
+                for fact in feasibility_reasons:
+                    claims.append(
+                        _claim(
+                            f"理由：{fact.value}",
+                            [fact],
+                            f"claim-{len(claims) + 1}",
+                        )
+                    )
+            else:
+                for subject, facts in by_subject.items():
+                    values = {fact.predicate: fact for fact in facts}
+                    if "remaining_credits" in values:
+                        fact = values["remaining_credits"]
+                        if isinstance(fact.value, (int, float)):
+                            claims.append(
+                                _claim(
+                                    f"{subject}尚差 {fact.value:g} 学分。",
+                                    [fact],
+                                    f"claim-{len(claims) + 1}",
+                                )
+                            )
         else:
             for fact in (
                 [

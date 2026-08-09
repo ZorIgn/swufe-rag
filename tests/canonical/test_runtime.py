@@ -3,6 +3,7 @@ from __future__ import annotations
 from agent.mcp import MCPAdapter
 from evidence.models import ClaimSpan, ClaimValidation, EvidencePacket, Fact, FinalAnswer
 from generation.validator import ClaimValidator
+from query.planner import _policy_question
 from query.schemas import ALL_OPERATION_TYPES
 
 
@@ -21,6 +22,9 @@ def test_generic_multi_program_comparison(canonical_runtime) -> None:
     assert state.plan.operations[0].type == "compare_programs"
     assert not answer.refused
     assert answer.claims
+    assert "测试专业X独有课程：TST101" in answer.answer_md
+    assert "测试专业Y独有课程：TST201" in answer.answer_md
+    assert all(claim.validation.passed for claim in answer.claims)
 
 
 def test_policy_retrieval_is_composed_from_registry(canonical_runtime) -> None:
@@ -31,8 +35,40 @@ def test_policy_retrieval_is_composed_from_registry(canonical_runtime) -> None:
     assert not answer.refused
 
 
+def test_policy_answer_preserves_retrieval_rank(canonical_runtime) -> None:
+    answer, state = canonical_runtime.ask("测试学院转专业有什么规定？")
+    assert state.plan is not None
+    assert [operation.type for operation in state.plan.operations] == ["retrieve_policy"]
+    assert not answer.refused
+    assert "学生申请转专业应提交材料" in answer.answer_md
+    assert "测试专业X培养方案" not in answer.answer_md
+
+
+def test_ordinary_course_name_routes_to_scoped_course_detail(canonical_runtime) -> None:
+    answer, state = canonical_runtime.ask(
+        "2024级测试专业X的测试算法多少学分，在哪个学期开设？"
+    )
+    assert state.normalized_query is not None
+    assert state.normalized_query.intent == "course_detail"
+    assert state.normalized_query.course_ids
+    assert state.plan is not None
+    assert [operation.type for operation in state.plan.operations] == ["get_course_detail"]
+    assert not answer.refused
+    assert "测试算法（TST101）：3 学分，第 1 学期开设。" in answer.answer_md
+
+
+def test_unscoped_course_name_clarifies_instead_of_searching_policy(canonical_runtime) -> None:
+    answer, state = canonical_runtime.ask("测试算法多少学分，在哪个学期开设？")
+    assert state.normalized_query is not None
+    assert state.normalized_query.intent == "course_detail"
+    assert set(state.normalized_query.missing_fields) == {"cohort", "program"}
+    assert state.plan is None
+    assert answer.clarification
+    assert not answer.refused
+
+
 def test_three_operation_sql_rag_composite_plan(canonical_runtime) -> None:
-    _, state = canonical_runtime.ask(
+    answer, state = canonical_runtime.ask(
         "2024级测试专业X专业方向课要多少学分，相关课程有哪些，学校对跨专业选修又有什么规定？"
     )
     assert state.plan is not None
@@ -41,6 +77,23 @@ def test_three_operation_sql_rag_composite_plan(canonical_runtime) -> None:
         "list_courses",
         "retrieve_policy",
     ]
+    policy_operation = state.plan.operations[-1]
+    assert policy_operation.type == "retrieve_policy"
+    assert policy_operation.args.question == "学校对跨专业选修又有什么规定"
+    assert not answer.refused
+    assert "3 学分" in answer.answer_md
+    assert "TST101" in answer.answer_md
+    assert "学生申请转专业应提交材料" in answer.answer_md
+
+
+def test_composite_policy_question_rewrites_exemption_as_a_condition_query() -> None:
+    assert (
+        _policy_question(
+            "2024级人工智能专业的专业选修课最低学分和课程有哪些？"
+            "另外大学英语免修有什么规定？"
+        )
+        == "大学英语达到什么条件可以免修"
+    )
 
 
 def test_registry_exhaustively_covers_planner_operation_types(canonical_runtime) -> None:
@@ -99,6 +152,9 @@ def test_chinese_stage_terms_are_parsed_without_entity_hardcoding() -> None:
     assert draft.current_stage is not None
     assert draft.current_stage.year == 3
     assert draft.target_semesters == (5, 6)
+
+    deadline = deterministic_understanding("我能在大四前修完并毕业吗？")
+    assert deadline.deadline_semester == 7
 
 
 def test_mcp_validates_and_executes_typed_arguments(canonical_runtime) -> None:

@@ -20,12 +20,27 @@ def main() -> None:
     parser.add_argument("--sources", type=Path, default=Path("data/sources.csv"))
     parser.add_argument("--chunks", type=Path, default=Path("data/chunks.jsonl"))
     parser.add_argument("--aliases", type=Path, default=Path("config/entity_aliases.json"))
+    parser.add_argument(
+        "--source-review",
+        type=Path,
+        default=Path("data/source_review.csv"),
+        help=(
+            "independent reviewer ledger; only include, include_ocr, include_converted, "
+            "or include_split promote verified evidence"
+        ),
+    )
+    parser.add_argument(
+        "--evidence-review",
+        type=Path,
+        default=Path("data/evidence_review.csv"),
+        help="independent chunk-review ledger; only exact verified/include decisions promote a chunk",
+    )
     parser.add_argument("--manifest-dir", type=Path, default=Path("artifacts/manifests"))
     parser.add_argument("--retrieval-root", type=Path, default=Path("artifacts/retrieval"))
     parser.add_argument(
         "--retrieval-mode",
         choices=("lexical", "hybrid"),
-        default=os.getenv("SWUFE_RETRIEVAL_MODE", "lexical"),
+        default=os.getenv("SWUFE_RETRIEVAL_MODE", "hybrid"),
     )
     parser.add_argument(
         "--embedding-model", default=os.getenv("SWUFE_EMBEDDING_MODEL", "BAAI/bge-base-zh-v1.5")
@@ -40,6 +55,8 @@ def main() -> None:
         sources_path=args.sources,
         chunks_path=args.chunks,
         aliases_path=args.aliases,
+        source_review_path=args.source_review,
+        evidence_review_path=args.evidence_review,
     )
     with sqlite3.connect(args.database) as connection:
         page_count = int(
@@ -58,7 +75,7 @@ def main() -> None:
         retrieval = build_retrieval_index(
             list(repository.retrieval_documents()),
             dataset_version=dataset_version,
-            source_hash=str(report["chunks_sha256"]),
+            source_hash=str(report["evidence_state_sha256"]),
             output_root=args.retrieval_root,
             mode=args.retrieval_mode,
             embedding_model=args.embedding_model,
@@ -75,12 +92,15 @@ def main() -> None:
             "catalog": report["catalog_sha256"],
             "sources": report["sources_sha256"],
             "chunks": report["chunks_sha256"],
+            "source_review": report["source_review_sha256"],
+            "evidence_review": report["evidence_review_sha256"],
         },
         "page_count": page_count,
         "chunk_count": report["chunk_count"],
         "program_count": report["program_count"],
         "course_count": report["offering_count"],
         "requirement_count": report["requirement_count"],
+        "quarantined_requirement_count": report["quarantined_requirement_count"],
         "retrieval_mode": args.retrieval_mode,
         "embedding_model": retrieval["embedding_model"],
         "embedding_dimension": retrieval["embedding_dimension"],

@@ -127,3 +127,105 @@ def test_validator_rejects_required_credit_maximum_claim() -> None:
     assert result.refused
     assert BoundaryPolarity.MAXIMUM in text_signature("专业选修最多可修 3 学分。").boundaries
     assert any("minimum_vs_maximum" in reason for reason in result.claims[0].validation.reasons)
+
+
+def test_validator_rejects_cross_record_fact_recombination() -> None:
+    packet = _packet(quote="课程A（AAA101）为2学分；课程B（BBB202）为4学分。")
+    packet = packet.model_copy(
+        update={
+            "facts": (
+                Fact(
+                    fact_id="course-a-name",
+                    type="course",
+                    subject="record-a",
+                    predicate="name",
+                    value="课程A",
+                    source_record_ids=("record-a",),
+                    evidence_ids=("evidence",),
+                ),
+                Fact(
+                    fact_id="course-b-credits",
+                    type="course",
+                    subject="record-b",
+                    predicate="credits",
+                    value=4,
+                    unit="credits",
+                    source_record_ids=("record-b",),
+                    evidence_ids=("evidence",),
+                ),
+            )
+        }
+    )
+    answer = FinalAnswer(
+        answer_md="课程A为4学分。",
+        claims=(
+            ClaimSpan(
+                text="课程A为4学分。",
+                fact_ids=("course-a-name", "course-b-credits"),
+                evidence_ids=("evidence",),
+                validation=ClaimValidation(claim_id="claim", passed=False),
+            ),
+        ),
+        citations=(),
+    )
+
+    result = ClaimValidator().validate(answer, packet)
+
+    assert result.refused
+    assert "claim_facts_cross_record" in result.claims[0].validation.reasons
+
+
+def test_validator_allows_atomic_facts_from_the_same_record() -> None:
+    packet = _packet(quote="课程A为2学分。")
+    packet = packet.model_copy(
+        update={
+            "facts": (
+                Fact(
+                    fact_id="course-a-name",
+                    type="course",
+                    subject="record-a",
+                    predicate="name",
+                    value="课程A",
+                    source_record_ids=("record-a",),
+                    evidence_ids=("evidence",),
+                ),
+                Fact(
+                    fact_id="course-a-credits",
+                    type="course",
+                    subject="record-a",
+                    predicate="credits",
+                    value=2,
+                    unit="credits",
+                    source_record_ids=("record-a",),
+                    evidence_ids=("evidence",),
+                ),
+            )
+        }
+    )
+    answer = FinalAnswer(
+        answer_md="课程A为2学分。",
+        claims=(
+            ClaimSpan(
+                text="课程A为2学分。",
+                fact_ids=("course-a-name", "course-a-credits"),
+                evidence_ids=("evidence",),
+                validation=ClaimValidation(claim_id="claim", passed=False),
+            ),
+        ),
+        citations=(),
+    )
+
+    result = ClaimValidator().validate(answer, packet)
+
+    assert not result.refused
+    assert result.claims[0].validation.passed
+
+
+def test_validator_rejects_unsupported_relation_with_shared_entity_words() -> None:
+    packet = _packet(quote="测试算法。该课程为选修。", predicate="excerpt")
+    result = ClaimValidator().validate(
+        _answer("测试算法属于校外培训，不计入任何培养方案。"), packet
+    )
+
+    assert result.refused
+    assert "claim_not_entailed_by_fact" in result.claims[0].validation.reasons

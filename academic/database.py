@@ -29,10 +29,16 @@ DEFAULT_CATALOG = ROOT / "data" / "curriculum_catalog.json"
 DEFAULT_SOURCES = ROOT / "data" / "sources.csv"
 DEFAULT_CHUNKS = ROOT / "data" / "chunks.jsonl"
 DEFAULT_ALIAS_CONFIG = ROOT / "config" / "entity_aliases.json"
+DEFAULT_SOURCE_REVIEW = ROOT / "data" / "source_review.csv"
+DEFAULT_EVIDENCE_REVIEW = ROOT / "data" / "evidence_review.csv"
 
 
 SCHEMA_VERSION = "1"
 REVIEW_STATUSES = frozenset({"verified", "review_required", "unverified"})
+VERIFIED_SOURCE_REVIEW_DECISIONS = frozenset(
+    {"include", "include_ocr", "include_converted", "include_split"}
+)
+VERIFIED_EVIDENCE_REVIEW_DECISIONS = frozenset({"verified", "include"})
 
 
 class DataIntegrityError(ValueError):
@@ -119,6 +125,12 @@ def _sha(path: Path) -> str | None:
     return digest.hexdigest()
 
 
+def _combined_sha(*values: str) -> str:
+    """Fingerprint evidence content together with its independent review ledgers."""
+
+    return sha256("\n".join(values).encode("utf-8")).hexdigest()
+
+
 def _semester(value: object) -> str:
     normalized = str(value or "").strip()
     return "" if normalized in {"", "未标注", "待定", "—", "-"} else normalized
@@ -174,6 +186,265 @@ def _review_status(value: object, *, default: str = "unverified") -> str:
             f"invalid review_status: {status!r}; expected one of {sorted(REVIEW_STATUSES)!r}"
         )
     return status
+
+
+@dataclass(frozen=True)
+class SourceReview:
+    """One reviewer-owned source decision from the independent audit ledger.
+
+    ``reviewer``, ``method``, and ``reviewed_at`` are deliberately optional so
+    the released ledger can add accountability fields without changing the
+    build contract.  Only the decision itself controls evidence trust.
+    """
+
+    original_title: str
+    corrected_title: str
+    decision: str
+    reviewer: str | None = None
+    method: str | None = None
+    reviewed_at: str | None = None
+
+
+@dataclass(frozen=True)
+class EvidenceReview:
+    """A reviewer-owned decision for one precise evidence chunk.
+
+    This ledger exists for vetted slices of an otherwise quarantined source.
+    Optional scope and audit fields keep the file forward-compatible without
+    allowing source chunks to self-promote through their JSON payload.
+    """
+
+    chunk_id: str
+    decision: str
+    scope: str | None = None
+    reviewer: str | None = None
+    method: str | None = None
+    reviewed_at: str | None = None
+
+
+def _title_key(value: object) -> str:
+    """Normalize a title or source filename for conservative ledger matching."""
+
+    raw = str(value or "").strip().replace("\\", "/")
+    if not raw:
+        return ""
+    return _normalized(Path(raw).stem)
+
+
+def _optional_review_value(row: dict[str, str | None], *names: str) -> str | None:
+    for name in names:
+        value = str(row.get(name) or "").strip()
+        if value:
+            return value
+    return None
+
+
+def _load_source_reviews(path: Path | None) -> tuple[SourceReview, ...]:
+    """Read a source-review ledger without making optional audit fields required."""
+
+    if path is None or not path.is_file():
+        return ()
+    with path.open(encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        required = {"original_title", "corrected_title", "decision"}
+        actual = set(reader.fieldnames or ())
+        if not required.issubset(actual):
+            missing = ", ".join(sorted(required - actual))
+            raise DataIntegrityError(f"source review ledger missing required columns: {missing}")
+        reviews: list[SourceReview] = []
+        for line_number, raw in enumerate(reader, start=2):
+            row = {str(key): value for key, value in raw.items() if key is not None}
+            original_title = str(row.get("original_title") or "").strip()
+            corrected_title = str(row.get("corrected_title") or "").strip()
+            decision = str(row.get("decision") or "").strip().lower()
+            if not original_title and not corrected_title:
+                raise DataIntegrityError(
+                    f"source review ledger row {line_number} has no original_title or corrected_title"
+                )
+            if not decision:
+                raise DataIntegrityError(
+                    f"source review ledger row {line_number} has no decision"
+                )
+            reviews.append(
+                SourceReview(
+                    original_title=original_title,
+                    corrected_title=corrected_title,
+                    decision=decision,
+                    reviewer=_optional_review_value(row, "reviewer"),
+                    method=_optional_review_value(row, "method", "review_method"),
+                    reviewed_at=_optional_review_value(
+                        row, "reviewed_at", "reviewed_on", "reviewed_date", "timestamp"
+                    ),
+                )
+            )
+    return tuple(reviews)
+
+
+def _load_evidence_reviews(path: Path | None) -> dict[str, EvidenceReview]:
+    """Read explicit chunk-level decisions from an independent audit ledger."""
+
+    if path is None or not path.is_file():
+        return {}
+    with path.open(encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        required = {"chunk_id", "decision"}
+        actual = set(reader.fieldnames or ())
+        if not required.issubset(actual):
+            missing = ", ".join(sorted(required - actual))
+            raise DataIntegrityError(f"evidence review ledger missing required columns: {missing}")
+        reviews: dict[str, EvidenceReview] = {}
+        for line_number, raw in enumerate(reader, start=2):
+            row = {str(key): value for key, value in raw.items() if key is not None}
+            chunk_id = str(row.get("chunk_id") or "").strip()
+            decision = str(row.get("decision") or "").strip().lower()
+            if not chunk_id:
+                raise DataIntegrityError(f"evidence review ledger row {line_number} has no chunk_id")
+            if not decision:
+                raise DataIntegrityError(f"evidence review ledger row {line_number} has no decision")
+            if chunk_id in reviews:
+                raise DataIntegrityError(f"duplicate chunk_id in evidence review ledger: {chunk_id!r}")
+            reviews[chunk_id] = EvidenceReview(
+                chunk_id=chunk_id,
+                decision=decision,
+                scope=_optional_review_value(row, "scope"),
+                reviewer=_optional_review_value(row, "reviewer"),
+                method=_optional_review_value(row, "method", "review_method"),
+                reviewed_at=_optional_review_value(
+                    row, "reviewed_at", "reviewed_on", "reviewed_date", "timestamp"
+                ),
+            )
+    return reviews
+
+
+def _review_for_source(
+    source: dict[str, str], reviews: tuple[SourceReview, ...]
+) -> SourceReview | None:
+    """Return an unambiguous trusted review for one registered source.
+
+    The reviewer ledger may correct a title, so both its original and corrected
+    forms are considered.  A filename basename is used only as a fallback
+    identifier.  Any conflicting match fails closed instead of picking an
+    arbitrary review decision.
+    """
+
+    title_key = _title_key(source.get("doc_title"))
+    basename_key = _title_key(source.get("file"))
+    matches = tuple(
+        review
+        for review in reviews
+        if title_key
+        in {_title_key(review.original_title), _title_key(review.corrected_title)}
+        or (
+            basename_key
+            and basename_key
+            in {_title_key(review.original_title), _title_key(review.corrected_title)}
+        )
+    )
+    decisions = {review.decision for review in matches}
+    if len(decisions) != 1:
+        return None
+    review = matches[0]
+    return review if review.decision in VERIFIED_SOURCE_REVIEW_DECISIONS else None
+
+
+def _section_review_status(
+    raw_status: object,
+    source_review: SourceReview | None,
+    evidence_review: EvidenceReview | None,
+) -> str:
+    """Use the ledger, never a chunk's self-assertion, to promote verification."""
+
+    if evidence_review is not None:
+        return (
+            "verified"
+            if evidence_review.decision in VERIFIED_EVIDENCE_REVIEW_DECISIONS
+            else "unverified"
+        )
+    if source_review is not None:
+        return "verified"
+    claimed = _review_status(raw_status)
+    # An external chunk can request a review, but cannot mark itself verified.
+    return "review_required" if claimed == "verified" else claimed
+
+
+def _structured_review_status(
+    evidence: object,
+    source_id: str,
+    section_statuses: dict[str, tuple[str, str]],
+) -> str:
+    """Derive structured-record trust from the exact evidence it references."""
+
+    if not isinstance(evidence, dict):
+        return "review_required"
+    chunk_id = str(evidence.get("chunk_id") or "").strip()
+    if not chunk_id:
+        return "review_required"
+    stored = section_statuses.get(chunk_id)
+    if stored is None or stored[0] != source_id:
+        return "unverified"
+    return stored[1]
+
+
+def _evidence_chunk_id(evidence: object) -> str | None:
+    if not isinstance(evidence, dict):
+        return None
+    value = str(evidence.get("chunk_id") or "").strip()
+    return value or None
+
+
+def _load_sections(
+    chunk_file: Path,
+    source_ids: dict[tuple[str, str], str],
+    source_rows: list[dict[str, str]],
+    reviews: tuple[SourceReview, ...],
+    evidence_reviews: dict[str, EvidenceReview],
+) -> tuple[list[tuple[object, ...]], dict[str, tuple[str, str]]]:
+    """Materialize source sections and their ledger-derived trust state."""
+
+    reviews_by_source_id = {
+        source_ids[(str(row.get("doc_title") or "").strip(), _source_scope(row.get("cohort")))]: _review_for_source(row, reviews)
+        for row in source_rows
+    }
+    sections: list[tuple[object, ...]] = []
+    section_statuses: dict[str, tuple[str, str]] = {}
+    if not chunk_file.is_file():
+        return sections, section_statuses
+    with chunk_file.open(encoding="utf-8") as stream:
+        for line_number, line in enumerate(stream, start=1):
+            if not line.strip():
+                continue
+            value = json.loads(line)
+            if not isinstance(value, dict):
+                raise DataIntegrityError(f"chunk line {line_number} must be a JSON object")
+            title = str(value["doc_title"]).strip()
+            chunk_cohort = _source_scope(value.get("cohort"))
+            source_id = _source_for(title, chunk_cohort, source_ids)
+            chunk_id = str(value["chunk_id"]).strip()
+            if not chunk_id:
+                raise DataIntegrityError(f"chunk line {line_number} has an empty chunk_id")
+            if chunk_id in section_statuses:
+                raise DataIntegrityError(f"duplicate chunk_id in chunk file: {chunk_id!r}")
+            review_status = _section_review_status(
+                value.get("review_status"),
+                reviews_by_source_id.get(source_id),
+                evidence_reviews.get(chunk_id),
+            )
+            section_statuses[chunk_id] = (source_id, review_status)
+            sections.append(
+                (
+                    chunk_id,
+                    source_id,
+                    value.get("article"),
+                    value["text"],
+                    _page(value.get("article")),
+                    int(bool(value.get("is_table"))),
+                    PARSER_VERSION,
+                    datetime.now(timezone.utc).isoformat(),
+                    0.8,
+                    review_status,
+                )
+            )
+    return sections, section_statuses
 
 
 def _source_index(rows: Iterable[dict[str, str]]) -> dict[tuple[str, str], dict[str, str]]:
@@ -276,15 +547,21 @@ def build_database(
     sources_path: str | Path = DEFAULT_SOURCES,
     chunks_path: str | Path = DEFAULT_CHUNKS,
     aliases_path: str | Path = DEFAULT_ALIAS_CONFIG,
+    source_review_path: str | Path | None = DEFAULT_SOURCE_REVIEW,
+    evidence_review_path: str | Path | None = DEFAULT_EVIDENCE_REVIEW,
 ) -> dict[str, object]:
     """Build a new immutable SQLite projection; generated output is not Git data."""
     target, catalog_file, source_file, chunk_file = map(
         Path, (output, catalog_path, sources_path, chunks_path)
     )
+    source_review_file = Path(source_review_path) if source_review_path is not None else None
+    evidence_review_file = Path(evidence_review_path) if evidence_review_path is not None else None
     catalog = json.loads(catalog_file.read_text(encoding="utf-8"))
     source_rows = _source_rows(source_file)
     _source_index(source_rows)
     aliases = _read_aliases(Path(aliases_path))
+    source_reviews = _load_source_reviews(source_review_file)
+    evidence_reviews = _load_evidence_reviews(evidence_review_file)
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.with_suffix(target.suffix + ".tmp")
     if temporary.exists():
@@ -293,11 +570,18 @@ def build_database(
     try:
         connection.executescript(SCHEMA)
         source_ids = _materialize_sources(connection, source_rows, ROOT)
+        sections, section_statuses = _load_sections(
+            chunk_file, source_ids, source_rows, source_reviews, evidence_reviews
+        )
+        connection.executemany(
+            "INSERT INTO source_sections VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", sections
+        )
         program_rows: list[tuple[object, ...]] = []
         alias_rows: set[tuple[str, str, str]] = set()
         module_rows: list[tuple[str, str, str]] = []
         module_map: dict[tuple[str, str], str] = {}
         requirement_rows: list[tuple[object, ...]] = []
+        quarantined_requirement_count = 0
         for plan in catalog.get("plans", []):
             cohort = int(plan["cohort"])
             source_id = _source_for(plan["source_title"], cohort, source_ids)
@@ -317,8 +601,20 @@ def build_database(
                 module_id = _module_id(program_id, module_name)
                 module_map[(program_id, module_name)] = module_id
                 module_rows.append((module_id, program_id, module_name))
-                evidence = module.get("evidence") or {}
-                page = _page(evidence.get("article"))
+                evidence = module.get("evidence")
+                page = _page(evidence.get("article") if isinstance(evidence, dict) else None)
+                chunk_id = _evidence_chunk_id(evidence)
+                review_status = _structured_review_status(
+                    evidence, source_id, section_statuses
+                )
+                # Untraceable requirements remain in the source catalog's
+                # review queue, not in the production projection.  Keeping
+                # thousands of rows with no evidence made the release verifier
+                # fail while also inviting downstream tools to treat them as
+                # partially usable requirements.
+                if chunk_id is None or review_status == "unverified":
+                    quarantined_requirement_count += 1
+                    continue
                 requirement_rows.append(
                     (
                         stable_id("req", program_id, module_name),
@@ -329,10 +625,10 @@ def build_database(
                         module.get("rule_text") or "",
                         source_id,
                         page,
-                        evidence.get("chunk_id"),
+                        chunk_id,
                         PARSER_VERSION,
                         0.9 if evidence else 0.6,
-                        "verified" if evidence else "review_required",
+                        review_status,
                     )
                 )
         connection.executemany(
@@ -385,7 +681,7 @@ def build_database(
             for alias, target_name in aliases["course_aliases"].items():
                 if target_name == name:
                     course_alias_rows.add((alias, _normalized(alias), course_id))
-            evidence = course.get("evidence") or {}
+            evidence = course.get("evidence")
             source_id = _source_for(course["source_title"], cohort, source_ids)
             record_id = stable_id(
                 "offering",
@@ -413,10 +709,10 @@ def build_database(
                     source_id,
                     course.get("page"),
                     course.get("source_row"),
-                    evidence.get("chunk_id"),
+                    _evidence_chunk_id(evidence),
                     PARSER_VERSION,
                     0.95 if evidence else 0.7,
-                    "verified" if evidence else "review_required",
+                    _structured_review_status(evidence, source_id, section_statuses),
                 )
             )
         connection.executemany("INSERT OR IGNORE INTO courses VALUES (?, ?, ?)", course_rows)
@@ -427,40 +723,23 @@ def build_database(
             "INSERT OR IGNORE INTO program_courses VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             offering_rows,
         )
-        if chunk_file.is_file():
-            sections: list[tuple[object, ...]] = []
-            with chunk_file.open(encoding="utf-8") as stream:
-                for line in stream:
-                    value = json.loads(line)
-                    title = str(value["doc_title"]).strip()
-                    chunk_cohort = _source_scope(value.get("cohort"))
-                    source_id = _source_for(title, chunk_cohort, source_ids)
-                    review_status = _review_status(value.get("review_status"))
-                    sections.append(
-                        (
-                            value["chunk_id"],
-                            source_id,
-                            value.get("article"),
-                            value["text"],
-                            _page(value.get("article")),
-                            int(bool(value.get("is_table"))),
-                            PARSER_VERSION,
-                            datetime.now(timezone.utc).isoformat(),
-                            0.8,
-                            review_status,
-                        )
-                    )
-            connection.executemany(
-                "INSERT OR IGNORE INTO source_sections VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                sections,
-            )
+        chunks_sha256 = _sha(chunk_file) or ""
+        source_review_sha256 = (_sha(source_review_file) or "") if source_review_file else ""
+        evidence_review_sha256 = (
+            (_sha(evidence_review_file) or "") if evidence_review_file else ""
+        )
         metadata = {
             "schema_version": SCHEMA_VERSION,
             "parser_version": PARSER_VERSION,
             "dataset_version": str(catalog.get("catalog_version", "unknown")),
             "catalog_sha256": _sha(catalog_file) or "",
             "sources_sha256": _sha(source_file) or "",
-            "chunks_sha256": _sha(chunk_file) or "",
+            "chunks_sha256": chunks_sha256,
+            "source_review_sha256": source_review_sha256,
+            "evidence_review_sha256": evidence_review_sha256,
+            "evidence_state_sha256": _combined_sha(
+                chunks_sha256, source_review_sha256, evidence_review_sha256
+            ),
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         connection.executemany("INSERT INTO metadata VALUES (?, ?)", metadata.items())
@@ -475,7 +754,11 @@ def build_database(
                 0
             ],
             "chunk_count": connection.execute("SELECT count(*) FROM source_sections").fetchone()[0],
+            "verified_chunk_count": connection.execute(
+                "SELECT count(*) FROM source_sections WHERE review_status='verified'"
+            ).fetchone()[0],
             **metadata,
+            "quarantined_requirement_count": quarantined_requirement_count,
         }
     finally:
         connection.close()
@@ -538,6 +821,100 @@ class AcademicRepository:
 
     def metadata(self) -> dict[str, str]:
         return {row["key"]: row["value"] for row in self._all("SELECT key, value FROM metadata")}
+
+    def evidence_readiness(self) -> tuple[bool, tuple[str, ...]]:
+        """Check that verified evidence supports the agent's core curriculum work.
+
+        A database can be syntactically complete while every chunk is still
+        pending review.  Health readiness therefore requires one current
+        program with both a verified course offering and a verified structured
+        requirement, each tied to a verified source section from the same
+        source, plus a verified current policy chunk that is not merely the
+        provenance of one structured course or requirement.  This is
+        deliberately stronger than checking file existence.
+        """
+
+        def count(statement: str) -> int:
+            row = self._one(statement)
+            return int(row[0]) if row is not None else 0
+
+        verified_sections = count(
+            "SELECT count(*) FROM source_sections WHERE review_status='verified'"
+        )
+        verified_courses = count(
+            """
+            SELECT count(*)
+            FROM program_courses pc
+            JOIN source_sections ss
+              ON ss.chunk_id=pc.chunk_id AND ss.source_id=pc.source_id
+            WHERE pc.review_status='verified' AND ss.review_status='verified'
+            """
+        )
+        verified_requirements = count(
+            """
+            SELECT count(*)
+            FROM requirements r
+            JOIN source_sections ss
+              ON ss.chunk_id=r.chunk_id AND ss.source_id=r.source_id
+            WHERE r.required_credits IS NOT NULL
+              AND r.review_status='verified'
+              AND ss.review_status='verified'
+            """
+        )
+        verified_policy_evidence = count(
+            """
+            SELECT count(*)
+            FROM source_sections ss
+            JOIN sources s ON s.source_id=ss.source_id
+            WHERE ss.review_status='verified'
+              AND s.status='现行'
+              AND NOT EXISTS (
+                SELECT 1 FROM program_courses pc WHERE pc.chunk_id=ss.chunk_id
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM requirements r WHERE r.chunk_id=ss.chunk_id
+              )
+            """
+        )
+        answerable_programs = count(
+            """
+            SELECT count(*)
+            FROM programs p
+            JOIN sources ps ON ps.source_id=p.source_id
+            WHERE ps.status='现行'
+              AND EXISTS (
+                SELECT 1
+                FROM program_courses pc
+                JOIN source_sections ss
+                  ON ss.chunk_id=pc.chunk_id AND ss.source_id=pc.source_id
+                WHERE pc.program_id=p.program_id
+                  AND pc.review_status='verified'
+                  AND ss.review_status='verified'
+              )
+              AND EXISTS (
+                SELECT 1
+                FROM requirements r
+                JOIN source_sections ss
+                  ON ss.chunk_id=r.chunk_id AND ss.source_id=r.source_id
+                WHERE r.program_id=p.program_id
+                  AND r.required_credits IS NOT NULL
+                  AND r.review_status='verified'
+                  AND ss.review_status='verified'
+              )
+            """
+        )
+        reasons: list[str] = []
+        if not verified_sections:
+            reasons.append("verified_evidence_missing")
+        if not verified_courses:
+            reasons.append("verified_course_evidence_missing")
+        if not verified_requirements:
+            reasons.append("verified_requirement_evidence_missing")
+        if not verified_policy_evidence:
+            reasons.append("verified_policy_evidence_missing")
+        if not answerable_programs:
+            reasons.append("core_business_unanswerable")
+        return not reasons, tuple(reasons)
 
     def options(self) -> dict[str, object]:
         rows = self._all(
@@ -758,21 +1135,38 @@ class AcademicRepository:
         return tuple(values.values())
 
     def programs_in_text(self, text: str, cohort: int | None = None) -> tuple[ResolvedEntity, ...]:
+        normalized_text = _normalized(text)
         rows = self._all(
-            "SELECT DISTINCT a.alias FROM program_aliases a"
-            + (" JOIN programs p ON p.program_id=a.program_id WHERE p.cohort=?" if cohort else ""),
+            "SELECT DISTINCT a.alias, p.canonical_name FROM program_aliases a "
+            "JOIN programs p ON p.program_id=a.program_id"
+            + (" WHERE p.cohort=?" if cohort else ""),
             (cohort,) if cohort else (),
         )
-        values: list[ResolvedEntity] = []
+        matches: list[tuple[int, int, ResolvedEntity]] = []
         for row in rows:
-            resolved = self.resolve_program(str(row["alias"]), cohort)
+            alias = _normalized(str(row["alias"]))
+            position = normalized_text.find(alias)
+            if position < 0:
+                continue
+            canonical_name = _normalized(str(row["canonical_name"]))
+            canonical_stem = canonical_name.removesuffix("专业")
             if (
-                resolved
-                and _normalized(str(row["alias"])) in _normalized(text)
-                and resolved.canonical_id not in {item.canonical_id for item in values}
+                canonical_name != canonical_stem
+                and alias == canonical_stem
+                and f"{canonical_stem}专业" not in normalized_text
             ):
-                values.append(resolved)
-        return tuple(values)
+                # Do not infer 英语专业 from 大学英语, or similarly overload a
+                # bare canonical stem that is also ordinary academic wording.
+                continue
+            resolved = self.resolve_program(str(row["alias"]), cohort)
+            if resolved:
+                matches.append((position, -len(alias), resolved))
+        values: dict[str, ResolvedEntity] = {}
+        for _position, _length, value in sorted(
+            matches, key=lambda item: (item[0], item[1], item[2].canonical_id)
+        ):
+            values.setdefault(value.canonical_id, value)
+        return tuple(values.values())
 
     def list_courses(
         self,

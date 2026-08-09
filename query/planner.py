@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from evidence.provenance import stable_id
 from query.schemas import (
     AuditCompletedCoursesArgs,
@@ -34,6 +36,44 @@ def _operation_id(query: NormalizedQuery, operation_type: str) -> str:
     return stable_id("op", query.raw_question, operation_type)
 
 
+_POLICY_MARKERS = (
+    "政策",
+    "规定",
+    "办法",
+    "条件",
+    "免修",
+    "推免",
+    "保研",
+    "转专业",
+    "学籍",
+    "考试",
+)
+
+
+def _policy_question(question: str) -> str:
+    """Keep structured clauses from diluting a composite policy search."""
+
+    clauses = [
+        re.sub(r"^(?:另外|此外|同时|以及|并且|再问)+", "", value).strip(" ：:,，")
+        for value in re.split(r"[？?。；;，,\n]+|另外|此外", question)
+    ]
+    policy_clauses = [
+        clause for clause in clauses if clause and any(marker in clause for marker in _POLICY_MARKERS)
+    ]
+    normalized: list[str] = []
+    for clause in policy_clauses:
+        if (
+            "免修" in clause
+            and "条件" not in clause
+            and any(marker in clause for marker in ("规定", "政策", "办法"))
+        ):
+            subject = clause.split("免修", 1)[0].strip()
+            if subject:
+                clause = f"{subject}达到什么条件可以免修"
+        normalized.append(clause)
+    return "；".join(normalized) or question
+
+
 def _policy_operation(
     query: NormalizedQuery, *, operation_id: str, depends_on: tuple[str, ...] = ()
 ) -> RetrievePolicyOperation:
@@ -41,7 +81,7 @@ def _policy_operation(
         operation_id=operation_id,
         depends_on=depends_on,
         args=RetrievePolicyArgs(
-            question=query.raw_question,
+            question=_policy_question(query.raw_question),
             cohort=query.cohort,
             program_ids=query.program_ids,
             college_ids=query.college_ids,
@@ -87,6 +127,7 @@ def _planning_operations(query: NormalizedQuery) -> tuple[Operation, ...]:
     assert query.cohort is not None and query.program_ids and query.deadline_semester is not None
     program_id = query.program_ids[0]
     requirement_id = _operation_id(query, "get_graduation_requirements")
+    catalog_id = _operation_id(query, "list_curriculum_courses")
     audit_id = _operation_id(query, "audit_completed_courses")
     before_id = _operation_id(query, "list_courses_before_semester")
     unavoidable_id = _operation_id(query, "list_unavoidable_courses")
@@ -96,9 +137,13 @@ def _planning_operations(query: NormalizedQuery) -> tuple[Operation, ...]:
             operation_id=requirement_id,
             args=GetGraduationRequirementsArgs(cohort=query.cohort, program_id=program_id),
         ),
+        ListCoursesOperation(
+            operation_id=catalog_id,
+            args=ListCoursesArgs(cohort=query.cohort, program_id=program_id),
+        ),
         AuditCompletedCoursesOperation(
             operation_id=audit_id,
-            depends_on=(requirement_id,),
+            depends_on=(requirement_id, catalog_id),
             args=AuditCompletedCoursesArgs(
                 cohort=query.cohort,
                 program_id=program_id,
@@ -107,7 +152,7 @@ def _planning_operations(query: NormalizedQuery) -> tuple[Operation, ...]:
         ),
         ListCoursesBeforeSemesterOperation(
             operation_id=before_id,
-            depends_on=(audit_id,),
+            depends_on=(catalog_id, audit_id),
             args=ListCoursesBeforeSemesterArgs(
                 cohort=query.cohort,
                 program_id=program_id,
@@ -117,7 +162,7 @@ def _planning_operations(query: NormalizedQuery) -> tuple[Operation, ...]:
         ),
         ListUnavoidableCoursesOperation(
             operation_id=unavoidable_id,
-            depends_on=(before_id,),
+            depends_on=(catalog_id, audit_id),
             args=ListUnavoidableCoursesArgs(
                 cohort=query.cohort,
                 program_id=program_id,
@@ -126,7 +171,7 @@ def _planning_operations(query: NormalizedQuery) -> tuple[Operation, ...]:
         ),
         CheckCurriculumFeasibilityOperation(
             operation_id=feasibility_id,
-            depends_on=(audit_id, unavoidable_id),
+            depends_on=(audit_id, before_id, unavoidable_id),
             args=CheckCurriculumFeasibilityArgs(
                 cohort=query.cohort,
                 program_id=program_id,

@@ -1,0 +1,44 @@
+# Version-control and local tool state
+.git/
+.github/
+.agents/
+.worktrees/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Generated or released data is mounted into the image at runtime.  Keeping it
+# out of build context avoids leaking local data and invalidating layer caches.
+data/raw/
+data/ocr/
+data/*.sqlite3
+data/*.sqlite3-shm
+data/*.sqlite3-wal
+data/chunks.jsonl
+data/curriculum_catalog.json
+data/sources.csv
+artifacts/
+models/
+analysis-output/
+backups/
+deliveries/
+runtime_logs/
+logs/
+tmp/
+
+# Development-only material
+tests/
+eval/
+docs/
+*.log

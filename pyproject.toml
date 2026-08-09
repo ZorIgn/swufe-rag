@@ -62,8 +62,22 @@ ignore = ["E501"]
 python_version = "3.10"
 strict = true
 warn_unused_ignores = true
+follow_imports_for_stubs = true
 exclude = ["data", "artifacts", "backups", "deliveries"]
 
 [[tool.mypy.overrides]]
 module = ["opentelemetry", "opentelemetry.*", "redis"]
 ignore_missing_imports = true
+
+# These optional runtime packages do not publish complete type information.
+# Keep their absence/stub status from obscuring checks of our own boundaries.
+[[tool.mypy.overrides]]
+module = ["faiss", "rank_bm25", "sentence_transformers"]
+ignore_missing_imports = true
+
+# The lock currently resolves NumPy stubs that use Python 3.12-only syntax,
+# while the runtime matrix still includes Python 3.10.  Treat NumPy as an
+# external typed boundary so mypy continues to check all project modules.
+[[tool.mypy.overrides]]
+module = ["numpy", "numpy.*"]
+follow_imports = "skip"

@@ -30,7 +30,7 @@ def build_retrieval_index(
     dataset_version: str,
     source_hash: str,
     output_root: str | Path = "artifacts/retrieval",
-    mode: Literal["lexical", "hybrid"] = "lexical",
+    mode: Literal["lexical", "hybrid"] = "hybrid",
     embedding_model: str = "BAAI/bge-base-zh-v1.5",
     reranker_model: str = "BAAI/bge-reranker-base",
 ) -> dict[str, object]:
@@ -68,6 +68,8 @@ def build_retrieval_index(
             embedding_dimension=dense.dimension,
             reranker_model=reranker_model,
             index_sha256=_sha(directory / "faiss.index"),
+            doc_ids_sha256=_sha(directory / "doc_ids.json"),
+            vectors_sha256=_sha(directory / "vectors.npy"),
         )
     manifest_path = directory / "retrieval_manifest.json"
     manifest_path.write_text(
