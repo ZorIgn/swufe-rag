@@ -3,7 +3,7 @@
 Use Python 3.10–3.12 and the checked-in uv lock:
 
 ~~~powershell
-uv sync --locked --extra dev
+uv sync --locked --extra dev --extra ingest
 ~~~
 
 Before submitting a change, run:

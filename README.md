@@ -101,7 +101,7 @@ clean Git candidate build
 ### 运行测试
 
 ~~~powershell
-uv sync --locked --extra dev
+uv sync --locked --extra dev --extra ingest
 uv run python -m ruff check agent academic app evidence generation ingest query retrieval storage scripts eval tests/canonical
 uv run python -m mypy agent academic app evidence generation ingest query retrieval storage scripts eval
 uv run python -m pytest -q tests/canonical

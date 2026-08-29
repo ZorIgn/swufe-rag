@@ -26,7 +26,7 @@ jobs:
           version: "0.11.33"
           enable-cache: true
       - name: Install canonical development dependencies
-        run: uv sync --locked --extra dev
+        run: uv sync --locked --extra dev --extra ingest
       - name: Lint
         run: >-
           uv run --no-sync python -m ruff check
