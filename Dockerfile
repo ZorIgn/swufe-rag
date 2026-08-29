@@ -26,7 +26,7 @@ COPY pyproject.toml uv.lock README.md ./
 # The production image intentionally includes the real dense-index and
 # cross-encoder dependencies.  Model weights and versioned artifacts are
 # mounted at runtime, never downloaded while building the image.
-RUN uv sync --locked --no-dev --extra retrieval --no-install-project
+RUN uv sync --locked --no-dev --extra retrieval --extra redis --no-install-project
 
 COPY agent/ ./agent/
 COPY academic/ ./academic/
@@ -39,10 +39,10 @@ COPY retrieval/ ./retrieval/
 COPY scripts/ ./scripts/
 COPY storage/ ./storage/
 COPY config/ ./config/
-RUN uv sync --locked --no-dev --extra retrieval
+RUN uv sync --locked --no-dev --extra retrieval --extra redis
 
 RUN useradd --create-home --uid 10001 appuser \
-    && mkdir -p /app/data /app/artifacts/retrieval /app/artifacts/manifests /models \
+    && mkdir -p /app/data /app/artifacts/releases /models \
     && chown -R appuser:appuser /app /models
 USER appuser
 

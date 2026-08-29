@@ -1,30 +1,39 @@
-# 数据目录
+# Local data directory
 
-生产数据包不提交到 Git。取得数据发布包后，将 `sources.csv`、`chunks.jsonl` 与
-`curriculum_catalog.json` 放入本目录，或运行：
+Official school data is not included in this repository. After obtaining an authorized release package, install it locally:
 
-```powershell
-python -m scripts.download_dataset --source-dir <released-data-directory>
-# 或：python -m scripts.download_dataset --url <dataset-zip-url>
-python -m scripts.build_all --source-review data/source_review.csv --evidence-review data/evidence_review.csv
-python -m scripts.verify_dataset --allow-review-required-requirements
-```
+~~~powershell
+uv run python -m scripts.download_dataset --source-dir <released-data-directory> --data-dir data/released
+~~~
 
-构建会生成本地 `academic.sqlite3` 和 `artifacts/manifests/` 下的不可变清单。若要从原始 PDF/DOCX 重新解析知识块，先运行 `uv sync --extra ingest`。
-原始文件可保存在 `raw/`，OCR 旁车文件保存在 `ocr/`；二者以及构建产物均被 Git
-忽略。用于 CI 的最小公开夹具位于 `tests/canonical/data/`，不能作为生产知识库。
+The installed package contains:
 
-来源、课程、培养要求或知识块发生变更后，应重新执行构建和完整性校验，不应手工修改
-SQLite 或清单中的统计信息。
+- <code>sources.csv</code>;
+- <code>chunks.jsonl</code>;
+- <code>curriculum_catalog.json</code>;
+- <code>source_review.csv</code>;
+- <code>evidence_review.csv</code>;
+- <code>dataset_manifest.json</code>;
+- optional source files under <code>raw/</code>.
 
-`source_review.csv` 是独立审核账本。只有精确决策 `include`、`include_ocr`、
-`include_converted`、`include_split` 会把匹配来源的知识块晋升为 `verified`；知识块
-JSON 自带的 `review_status` 不能自行完成该晋升。账本可附加 `reviewer`、`method` 和
-`reviewed_at` 等审计字段。`--allow-review-required-requirements` 只允许具有同级
-`review_required` 证据的结构化要求通过离线校验，运行时仍会保持 not ready，直到核心
-课程与培养要求均有 verified 证据。
+Build one immutable candidate release:
 
-当审核通过的是被隔离总册中的特定专业切片时，可新增 `evidence_review.csv`。它至少包含
-`chunk_id,decision`，并可附加 `scope,reviewer,method,reviewed_at`；仅精确决策
-`verified` 或 `include` 会晋升那个 chunk，且该细粒度账本优先于来源级账本。它不会使
-同一总册中的其他 chunk 获得 verified 状态。
+~~~powershell
+uv run python -m scripts.build_all --catalog data/released/curriculum_catalog.json --sources data/released/sources.csv --chunks data/released/chunks.jsonl --source-review data/released/source_review.csv --evidence-review data/released/evidence_review.csv --source-root data/released/raw --retrieval-mode hybrid --embedding-model <local-embedding-snapshot> --reranker-model <local-reranker-snapshot> --holdout-manifest <restricted-holdout/manifest.json>
+~~~
+
+The authoritative output is <code>artifacts/releases/sha256-*/</code>. A database, retrieval directory or manifest written through an explicit compatibility option is not an independently promotable release.
+
+## Review semantics
+
+<code>source_review.csv</code> records source-level inclusion decisions. <code>evidence_review.csv</code> may approve a specific chunk or scoped slice without promoting unrelated rows from the same source. Field materialization still requires source hash, page, row/cell or span lineage.
+
+<code>--allow-review-required-requirements</code> is a candidate-only diagnostic exception. It never turns unverified evidence into a ready production release.
+
+Reviewer names and timestamps are input metadata. This repository does not authenticate reviewers or implement an external approval workflow.
+
+## Raw parsing
+
+Install <code>--extra ingest</code> to parse PDF or DOCX sources. The pipeline records page/table quality and quarantines unsupported or low-quality extraction. It does not include an OCR engine or guarantee reliable extraction from arbitrary scanned PDFs.
+
+Do not hand-edit generated SQLite, retrieval files, release manifests or their statistics. Change the authorized inputs and build a new candidate.

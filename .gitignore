@@ -41,8 +41,15 @@ data/curriculum_catalog.json
 # Runtime output
 logs/
 eval/output/
+eval/reports/
 tmp/
 *.log
+
+# Local deliveries and one-off workspace tooling.  These can contain large
+# archives or material that is not part of a reproducible release.
+backups/
+deliveries/
+tools/
 
 # Editors and operating systems
 .idea/

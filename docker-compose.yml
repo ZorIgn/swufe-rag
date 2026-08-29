@@ -1,30 +1,47 @@
+# Requires a promoted active release, trusted attestation key/issuer and an
+# authentication configuration. Use scripts.run_demo for the offline fixture.
 services:
   academic-agent:
     build: .
     ports:
       - "8000:8000"
     environment:
-      SWUFE_ACADEMIC_DATABASE: /app/data/academic.sqlite3
-      SWUFE_RETRIEVAL_MODE: hybrid
-      SWUFE_RETRIEVAL_ARTIFACT_ROOT: /app/artifacts/retrieval
-      HF_HOME: /models
+      SWUFE_DEPLOYMENT_MODE: ${SWUFE_DEPLOYMENT_MODE:-production}
+      SWUFE_RELEASE_ROOT: /app/artifacts/releases
+      SWUFE_RELEASE_ATTESTATION_PUBLIC_KEY: ${SWUFE_RELEASE_ATTESTATION_PUBLIC_KEY:-}
+      SWUFE_RELEASE_ATTESTATION_ISSUER: ${SWUFE_RELEASE_ATTESTATION_ISSUER:-}
+      SWUFE_STATIC_BEARER_TOKEN: ${SWUFE_STATIC_BEARER_TOKEN:-}
+      SWUFE_STATIC_BEARER_PRINCIPAL: ${SWUFE_STATIC_BEARER_PRINCIPAL:-demo-operator}
+      SWUFE_STATIC_BEARER_ROLES: ${SWUFE_STATIC_BEARER_ROLES:-}
       SWUFE_CORS_ALLOW_ORIGINS: ${SWUFE_CORS_ALLOW_ORIGINS:-}
+      SWUFE_SESSION_BACKEND: ${SWUFE_SESSION_BACKEND:-memory}
+      SWUFE_REDIS_URL: ${SWUFE_REDIS_URL:-}
+      SWUFE_EMBEDDING_MODEL: ${SWUFE_EMBEDDING_MODEL:-/models/embedding}
+      SWUFE_RERANKER_MODEL: ${SWUFE_RERANKER_MODEL:-/models/reranker}
+      HF_HOME: /models
     volumes:
-      - ./data:/app/data:ro
       - ./artifacts:/app/artifacts:ro
       - ./models:/models:ro
     profiles: ["cpu"]
+
   academic-agent-gpu:
     build: .
     ports:
       - "8001:8000"
     environment:
-      SWUFE_ACADEMIC_DATABASE: /app/data/academic.sqlite3
-      SWUFE_RETRIEVAL_MODE: hybrid
-      SWUFE_RETRIEVAL_ARTIFACT_ROOT: /app/artifacts/retrieval
+      SWUFE_DEPLOYMENT_MODE: ${SWUFE_DEPLOYMENT_MODE:-production}
+      SWUFE_RELEASE_ROOT: /app/artifacts/releases
+      SWUFE_RELEASE_ATTESTATION_PUBLIC_KEY: ${SWUFE_RELEASE_ATTESTATION_PUBLIC_KEY:-}
+      SWUFE_RELEASE_ATTESTATION_ISSUER: ${SWUFE_RELEASE_ATTESTATION_ISSUER:-}
+      SWUFE_STATIC_BEARER_TOKEN: ${SWUFE_STATIC_BEARER_TOKEN:-}
+      SWUFE_STATIC_BEARER_PRINCIPAL: ${SWUFE_STATIC_BEARER_PRINCIPAL:-demo-operator}
+      SWUFE_STATIC_BEARER_ROLES: ${SWUFE_STATIC_BEARER_ROLES:-}
+      SWUFE_SESSION_BACKEND: ${SWUFE_SESSION_BACKEND:-memory}
+      SWUFE_REDIS_URL: ${SWUFE_REDIS_URL:-}
+      SWUFE_EMBEDDING_MODEL: ${SWUFE_EMBEDDING_MODEL:-/models/embedding}
+      SWUFE_RERANKER_MODEL: ${SWUFE_RERANKER_MODEL:-/models/reranker}
       HF_HOME: /models
     volumes:
-      - ./data:/app/data:ro
       - ./artifacts:/app/artifacts:ro
       - ./models:/models:ro
     deploy:
