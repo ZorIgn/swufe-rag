@@ -14,6 +14,7 @@ from typing import Protocol
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from evidence.models import (
+    ClaimAtom,
     ClaimDraft,
     ClaimSpan,
     ClaimValidation,
@@ -25,14 +26,307 @@ from generation.renderer import render
 from query.schemas import NormalizedQuery
 
 
+def _atom(fact: Fact) -> ClaimAtom:
+    """Project one bound fact into the claim atom contract.
+
+    Deterministic synthesis never asks the validator to rediscover which
+    number belongs to which predicate.  A multi-field sentence has one atom
+    per fact, making its semantics inspectable by callers as well as the
+    validator.
+    """
+
+    return ClaimAtom(
+        subject=fact.subject,
+        predicate=fact.predicate,
+        comparator=fact.comparator,
+        value=fact.value,
+        unit=fact.unit,
+        conditions=fact.conditions,
+        exceptions=fact.exceptions,
+        scope=fact.scope,
+        temporal=fact.temporal,
+        fact_ids=(fact.fact_id,),
+        evidence_ids=fact.evidence_ids,
+    )
+
+
 def _claim(text: str, facts: list[Fact], claim_id: str) -> ClaimSpan:
     evidence = tuple(sorted({item for fact in facts for item in fact.evidence_ids}))
     return ClaimSpan(
         text=text,
         fact_ids=tuple(fact.fact_id for fact in facts),
         evidence_ids=evidence,
+        atoms=tuple(_atom(fact) for fact in facts),
         validation=ClaimValidation(claim_id=claim_id, passed=False),
     )
+
+
+def _requirement_claims(packet: EvidencePacket, *, start: int) -> list[ClaimSpan]:
+    claims: list[ClaimSpan] = []
+    for fact in packet.facts:
+        if (
+            fact.type == "requirement"
+            and fact.predicate == "required_credits"
+            and isinstance(fact.value, (int, float))
+        ):
+            claims.append(
+                _claim(
+                    f"{fact.subject}最低要求为 {fact.value:g} 学分。",
+                    [fact],
+                    f"claim-{start + len(claims)}",
+                )
+            )
+    return claims
+
+
+def _course_claims(packet: EvidencePacket, *, start: int) -> list[ClaimSpan]:
+    groups: dict[str, list[Fact]] = defaultdict(list)
+    for fact in packet.facts:
+        if fact.type == "course":
+            groups[fact.subject].append(fact)
+    claims: list[ClaimSpan] = []
+    for facts in groups.values():
+        claim = _course_claim(facts, claim_id=f"claim-{start + len(claims)}")
+        if claim is not None:
+            claims.append(claim)
+    return claims
+
+
+def _course_claim(facts: list[Fact], *, claim_id: str) -> ClaimSpan | None:
+    """Render exactly the course atoms that the claim binds.
+
+    A prior version bound ``nature`` and ``module`` atoms but did not display
+    either value.  That made the semantic validator correctly reject an answer
+    even though every field existed in the database.  Keep the atomic contract
+    honest by rendering those optional fields whenever they are asserted.
+    """
+
+    data = {fact.predicate: fact for fact in facts}
+    required = ("name", "code", "credits", "semester")
+    if not set(required).issubset(data):
+        return None
+    values = [data[key] for key in (*required, "nature", "module") if key in data]
+    text = (
+        f"{data['name'].value}（{data['code'].value}）："
+        f"{data['credits'].value:g} 学分，第 {data['semester'].value} 学期开设。"
+    )
+    if "nature" in data:
+        text += f"课程性质为 {data['nature'].value}。"
+    if "module" in data:
+        text += f"所属模块为 {data['module'].value}。"
+    return _claim(text, values, claim_id)
+
+
+def _policy_claims(packet: EvidencePacket, *, start: int) -> list[ClaimSpan]:
+    fact = next(
+        (
+            candidate
+            for candidate in packet.facts
+            if candidate.type == "policy"
+            and candidate.predicate == "excerpt"
+            and isinstance(candidate.value, str)
+        ),
+        None,
+    )
+    if fact is None or not isinstance(fact.value, str):
+        return []
+    return [_claim(fact.value.replace("\n", " ")[:300].strip(), [fact], f"claim-{start}")]
+
+
+def _comparison_claims(packet: EvidencePacket, *, start: int) -> list[ClaimSpan]:
+    claims: list[ClaimSpan] = []
+    for fact in packet.facts:
+        if fact.type != "comparison":
+            continue
+        claim_id = f"claim-{start + len(claims)}"
+        if fact.predicate == "graduation_min_credits" and isinstance(
+            fact.value, (int, float)
+        ):
+            claims.append(
+                _claim(
+                    f"{fact.subject}的毕业最低学分为 {fact.value:g} 学分。",
+                    [fact],
+                    claim_id,
+                )
+            )
+        elif fact.predicate == "sum_of_structured_module_minimums" and isinstance(
+            fact.value, (int, float)
+        ):
+            claims.append(
+                _claim(
+                    f"{fact.subject}的结构化模块最低学分合计为 {fact.value:g} 学分"
+                    "（不等同于已观测的毕业最低学分）。",
+                    [fact],
+                    claim_id,
+                )
+            )
+        elif fact.predicate == "module_required_credits" and isinstance(
+            fact.value, (int, float)
+        ):
+            claims.append(
+                _claim(
+                    f"{fact.subject}的一个模块最低要求为 {fact.value:g} 学分。",
+                    [fact],
+                    claim_id,
+                )
+            )
+        elif fact.predicate == "shared_courses" and isinstance(fact.value, list) and fact.value:
+            claims.append(
+                _claim(
+                    f"两个专业共有课程：{'、'.join(str(value) for value in fact.value)}。",
+                    [fact],
+                    claim_id,
+                )
+            )
+        elif (
+            fact.predicate == "courses_only_in_program"
+            and isinstance(fact.value, list)
+            and fact.value
+        ):
+            claims.append(
+                _claim(
+                    f"{fact.subject}独有课程："
+                    f"{'、'.join(str(value) for value in fact.value)}。",
+                    [fact],
+                    claim_id,
+                )
+            )
+        elif fact.predicate == "required_courses" and isinstance(fact.value, list) and fact.value:
+            claims.append(
+                _claim(
+                    f"{fact.subject}必修课程："
+                    f"{'、'.join(str(value) for value in fact.value)}。",
+                    [fact],
+                    claim_id,
+                )
+            )
+        elif (
+            fact.predicate == "practice_requirements"
+            and isinstance(fact.value, list)
+            and fact.value
+        ):
+            claims.append(
+                _claim(
+                    f"{fact.subject}实践课程要求涉及："
+                    f"{'、'.join(str(value) for value in fact.value)}。",
+                    [fact],
+                    claim_id,
+                )
+            )
+    return claims
+
+
+def _progress_claims(packet: EvidencePacket, *, start: int) -> list[ClaimSpan]:
+    claims: list[ClaimSpan] = []
+    for fact in packet.facts:
+        if fact.predicate == "remaining_credits" and isinstance(fact.value, (int, float)):
+            claims.append(
+                _claim(
+                    f"{fact.subject}尚差 {fact.value:g} 学分。",
+                    [fact],
+                    f"claim-{start + len(claims)}",
+                )
+            )
+    return claims
+
+
+def _planning_claims(packet: EvidencePacket, *, start: int) -> list[ClaimSpan]:
+    status = next(
+        (fact for fact in packet.facts if fact.predicate == "feasibility_status"),
+        None,
+    )
+    claims: list[ClaimSpan] = []
+    if status is not None:
+        claims.append(_claim(f"结论：{status.value}。", [status], f"claim-{start}"))
+        for fact in packet.facts:
+            if fact.predicate == "feasibility_reason":
+                claims.append(
+                    _claim(
+                        f"理由：{fact.value}",
+                        [fact],
+                        f"claim-{start + len(claims)}",
+                    )
+                )
+        return claims
+    return _progress_claims(packet, start=start)
+
+
+def _render_output_contract(query: NormalizedQuery, packet: EvidencePacket) -> FinalAnswer | None:
+    """Render independently requested outputs without losing safe partial results."""
+
+    requested = tuple(dict.fromkeys(query.requested_outputs))
+    if len(requested) <= 1:
+        return None
+
+    titles = {
+        "course_list": "课程",
+        "course_detail": "课程详情",
+        "module_requirements": "模块要求",
+        "graduation_requirements": "毕业要求",
+        "policy_explanation": "政策说明",
+        "progress_audit": "完成情况",
+        "comparison": "专业比较",
+        "course_plan": "课程规划",
+        "feasibility": "可行性",
+    }
+    sections: list[tuple[str, list[ClaimSpan]]] = []
+    unavailable: list[str] = []
+    claim_offset = 1
+    seen_claims: set[tuple[str, tuple[str, ...]]] = set()
+
+    for output in requested:
+        if output in query.unsupported_outputs:
+            unavailable.append(
+                f"- {titles[output]}：当前请求下该输出不可安全完成"
+                "（能力不支持或证据覆盖不足）"
+            )
+            continue
+
+        values: list[ClaimSpan]
+        if output in {"course_list", "course_detail"}:
+            values = _course_claims(packet, start=claim_offset)
+        elif output in {"module_requirements", "graduation_requirements"}:
+            values = _requirement_claims(packet, start=claim_offset)
+        elif output == "policy_explanation":
+            values = _policy_claims(packet, start=claim_offset)
+        elif output == "progress_audit":
+            values = _progress_claims(packet, start=claim_offset)
+        elif output == "comparison":
+            values = _comparison_claims(packet, start=claim_offset)
+        elif output in {"course_plan", "feasibility"}:
+            values = _planning_claims(packet, start=claim_offset)
+        else:
+            values = []
+
+        unique: list[ClaimSpan] = []
+        for claim in values:
+            key = (claim.text, claim.fact_ids)
+            if key in seen_claims:
+                continue
+            seen_claims.add(key)
+            unique.append(claim)
+        if unique:
+            sections.append((titles[output], unique))
+            claim_offset += len(unique)
+        else:
+            reason = (
+                "当前数据源不支持该输出"
+                if output in query.unsupported_outputs
+                else "缺少该输出所需的范围、实体或可信证据"
+            )
+            unavailable.append(f"- {titles[output]}：{reason}")
+
+    if not sections:
+        return None
+    claims = tuple(claim for _title, values in sections for claim in values)
+    body = "\n\n".join(
+        f"### {title}\n" + "\n".join(claim.text for claim in values)
+        for title, values in sections
+    )
+    if unavailable:
+        body += "\n\n### 未完成的输出\n" + "\n".join(unavailable)
+    return render(FinalAnswer(answer_md=body, claims=claims, citations=()))
+
 
 
 class StructuredModel(Protocol):
@@ -63,6 +357,9 @@ class DeterministicSynthesizer:
     """Formats facts only; arithmetic is supplied exclusively by DerivedFact values."""
 
     def synthesize(self, query: NormalizedQuery, packet: EvidencePacket) -> FinalAnswer:
+        output_contract_answer = _render_output_contract(query, packet)
+        if output_contract_answer is not None:
+            return output_contract_answer
         if query.missing_fields:
             labels = {
                 "cohort": "入学年级",
@@ -105,20 +402,9 @@ class DeterministicSynthesizer:
                 if fact.type == "course":
                     course_groups[fact.subject].append(fact)
             for facts in course_groups.values():
-                data = {fact.predicate: fact for fact in facts}
-                if {"name", "code", "credits", "semester"}.issubset(data):
-                    claims.append(
-                        _claim(
-                            f"{data['name'].value}（{data['code'].value}）："
-                            f"{data['credits'].value:g} 学分，第 {data['semester'].value} 学期开设。",
-                            [
-                                data[key]
-                                for key in ("name", "code", "credits", "semester", "nature", "module")
-                                if key in data
-                            ],
-                            f"claim-{len(claims) + 1}",
-                        )
-                    )
+                claim = _course_claim(facts, claim_id=f"claim-{len(claims) + 1}")
+                if claim is not None:
+                    claims.append(claim)
             policy_fact = next(
                 (
                     fact
@@ -141,27 +427,9 @@ class DeterministicSynthesizer:
                     )
         elif query.intent in {"course_query", "course_detail"}:
             for _subject, facts in by_subject.items():
-                data = {fact.predicate: fact for fact in facts}
-                if {"name", "code", "credits", "semester"}.issubset(data):
-                    text = f"{data['name'].value}（{data['code'].value}）：{data['credits'].value:g} 学分，第 {data['semester'].value} 学期开设。"
-                    claims.append(
-                        _claim(
-                            text,
-                            [
-                                data[key]
-                                for key in (
-                                    "name",
-                                    "code",
-                                    "credits",
-                                    "semester",
-                                    "nature",
-                                    "module",
-                                )
-                                if key in data
-                            ],
-                            f"claim-{len(claims) + 1}",
-                        )
-                    )
+                claim = _course_claim(facts, claim_id=f"claim-{len(claims) + 1}")
+                if claim is not None:
+                    claims.append(claim)
         elif query.intent in {"graduation_requirements", "module_requirements"}:
             for subject, facts in by_subject.items():
                 for fact in facts:
@@ -245,6 +513,32 @@ class DeterministicSynthesizer:
                                 f"claim-{len(claims) + 1}",
                             )
                         )
+                    elif (
+                        fact.predicate == "required_courses"
+                        and isinstance(fact.value, list)
+                        and fact.value
+                    ):
+                        claims.append(
+                            _claim(
+                                f"{subject}必修课程："
+                                f"{'、'.join(str(value) for value in fact.value)}。",
+                                [fact],
+                                f"claim-{len(claims) + 1}",
+                            )
+                        )
+                    elif (
+                        fact.predicate == "practice_requirements"
+                        and isinstance(fact.value, list)
+                        and fact.value
+                    ):
+                        claims.append(
+                            _claim(
+                                f"{subject}实践课程要求涉及："
+                                f"{'、'.join(str(value) for value in fact.value)}。",
+                                [fact],
+                                f"claim-{len(claims) + 1}",
+                            )
+                        )
         elif query.intent in {"course_planning", "curriculum_feasibility"}:
             status = next(
                 (fact for fact in packet.facts if fact.predicate == "feasibility_status"),
@@ -322,7 +616,9 @@ class LLMClaimSynthesizer:
         self._fallback = fallback
 
     def synthesize(self, query: NormalizedQuery, packet: EvidencePacket) -> FinalAnswer:
-        if query.missing_fields or not packet.facts:
+        # Multi-output answers have a deterministic section contract.  Keep
+        # their completeness independent of an optional wording model.
+        if query.missing_fields or not packet.facts or len(query.requested_outputs) > 1:
             return self._fallback.synthesize(query, packet)
         payload = {
             "question": query.raw_question,
@@ -334,6 +630,11 @@ class LLMClaimSynthesizer:
                     "predicate": fact.predicate,
                     "value": fact.value,
                     "unit": fact.unit,
+                    "role": fact.role,
+                    "conditions": fact.conditions,
+                    "exceptions": fact.exceptions,
+                    "scope": fact.scope,
+                    "temporal": fact.temporal,
                     "evidence_ids": fact.evidence_ids,
                 }
                 for fact in packet.facts
@@ -369,6 +670,7 @@ class LLMClaimSynthesizer:
                 text=claim.text,
                 fact_ids=claim.fact_ids,
                 evidence_ids=claim.evidence_ids,
+                atoms=claim.atoms,
                 validation=ClaimValidation(claim_id=claim.claim_id, passed=False),
             )
             for claim in parsed.claims

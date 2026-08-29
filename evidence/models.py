@@ -11,7 +11,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class StrictModel(BaseModel):
@@ -22,6 +22,18 @@ class EvidenceTrust(str, Enum):
     VERIFIED = "verified"
     REVIEW_REQUIRED = "review_required"
     UNVERIFIED = "unverified"
+
+
+FactRole = Literal["factual", "non_factual", "metadata"]
+ClaimComparator = Literal[
+    "equals",
+    "contains",
+    "at_least",
+    "at_most",
+    "before",
+    "after",
+    "satisfies",
+]
 
 
 class Provenance(StrictModel):
@@ -53,22 +65,90 @@ class Evidence(StrictModel):
 FactValue = str | int | float | bool | list[str]
 
 
+def _comparator_value_is_valid(comparator: ClaimComparator, value: FactValue) -> bool:
+    if comparator in {"at_least", "at_most"}:
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if comparator == "contains":
+        return isinstance(value, list)
+    if comparator in {"before", "after"}:
+        return isinstance(value, (str, int, float)) and not isinstance(value, bool)
+    return True
+
+
 class Fact(StrictModel):
     fact_id: str
     type: str
     subject: str
     predicate: str
     value: FactValue
+    comparator: ClaimComparator = "equals"
     unit: str | None = None
     source_record_ids: tuple[str, ...] = ()
     evidence_ids: tuple[str, ...] = ()
+    # Facts are factual unless an author deliberately classifies them as
+    # process metadata or a non-factual diagnostic.  This is deliberately not
+    # inferred from ``type``: adding a new fact type must not accidentally
+    # create an evidence bypass.
+    role: FactRole = "factual"
+    conditions: tuple[str, ...] = ()
+    exceptions: tuple[str, ...] = ()
+    scope: str | None = None
+    temporal: str | None = None
     derivation: Literal["observed", "retrieved", "tool_result", "derived"] = "observed"
+
+    @model_validator(mode="after")
+    def comparator_matches_value(self) -> Fact:
+        if not _comparator_value_is_valid(self.comparator, self.value):
+            raise ValueError(
+                f"comparator {self.comparator!r} is incompatible with fact value"
+            )
+        return self
 
 
 class DerivedFact(Fact):
     derivation: Literal["derived"] = "derived"
-    operator: Literal["sum", "difference", "intersection", "set_difference", "count"]
+    operator: Literal[
+        "sum",
+        "difference",
+        "intersection",
+        "set_difference",
+        "count",
+        "rule_evaluation",
+        "threshold_check",
+        "all_of",
+        "any_of",
+    ]
     input_fact_ids: tuple[str, ...]
+
+
+class ClaimAtom(StrictModel):
+    """One auditable semantic assertion inside a rendered claim.
+
+    Text remains useful for human readers, but validators must bind each
+    statement to an atom.  The atom makes numeric values, units, qualifiers,
+    scope and temporal boundaries explicit rather than treating them as a bag
+    of words found somewhere in the packet.
+    """
+
+    subject: str
+    predicate: str
+    comparator: ClaimComparator = "equals"
+    value: FactValue
+    unit: str | None = None
+    conditions: tuple[str, ...] = ()
+    exceptions: tuple[str, ...] = ()
+    scope: str | None = None
+    temporal: str | None = None
+    fact_ids: tuple[str, ...] = ()
+    evidence_ids: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def comparator_matches_value(self) -> ClaimAtom:
+        if not _comparator_value_is_valid(self.comparator, self.value):
+            raise ValueError(
+                f"comparator {self.comparator!r} is incompatible with claim value"
+            )
+        return self
 
 
 CoverageKind = Literal[
@@ -122,6 +202,7 @@ class ClaimDraft(StrictModel):
     text: str = Field(min_length=1)
     fact_ids: tuple[str, ...] = ()
     evidence_ids: tuple[str, ...] = ()
+    atoms: tuple[ClaimAtom, ...] = ()
 
 
 class ClaimValidation(StrictModel):
@@ -134,6 +215,7 @@ class ClaimSpan(StrictModel):
     text: str
     fact_ids: tuple[str, ...]
     evidence_ids: tuple[str, ...]
+    atoms: tuple[ClaimAtom, ...] = ()
     validation: ClaimValidation
 
 
@@ -166,6 +248,8 @@ class FinalAnswer(StrictModel):
 
 __all__ = [
     "ClaimDraft",
+    "ClaimAtom",
+    "ClaimComparator",
     "ClaimSpan",
     "ClaimValidation",
     "CoverageComponent",
@@ -176,6 +260,7 @@ __all__ = [
     "EvidencePacket",
     "EvidenceTrust",
     "Fact",
+    "FactRole",
     "FinalAnswer",
     "Provenance",
     "ToolExecutionResult",

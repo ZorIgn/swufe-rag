@@ -5,7 +5,8 @@ from __future__ import annotations
 from typing import Literal, Protocol
 
 from query.context import RequestContext
-from query.schemas import NormalizedQuery, ResolvedEntity, UnderstandingDraft
+from query.schemas import NormalizedQuery, RequestedOutput, ResolvedEntity, UnderstandingDraft
+from query.understanding import POLICY_TOPIC_KEYWORDS, policy_topics_for_question
 
 
 class EntityResolver(Protocol):
@@ -167,7 +168,7 @@ def normalize(
     # For a progress or feasibility question, resolve aliases from the database
     # after program/cohort scope is known. The parser never contains a course-name
     # special case.
-    if draft.intent in {"progress_audit", "curriculum_feasibility"}:
+    if draft.intent in {"progress_audit", "course_planning", "curriculum_feasibility"}:
         completed_mentions.extend(draft.course_codes)
     completed: list[ResolvedEntity] = []
     unmatched_completed: list[str] = []
@@ -182,7 +183,7 @@ def normalize(
             ambiguous_completed.append(mention)
         else:
             unmatched_completed.append(mention)
-    if draft.intent in {"progress_audit", "curriculum_feasibility"} and primary_program:
+    if draft.intent in {"progress_audit", "course_planning", "curriculum_feasibility"} and primary_program:
         for alias, candidates in resolver.course_mentions_in_text(
             question, cohort, primary_program
         ):
@@ -193,6 +194,20 @@ def normalize(
 
     intent = draft.intent
     requested_outputs = draft.requested_outputs
+    if not requested_outputs:
+        fallback_outputs: dict[str, RequestedOutput] = {
+            "course_query": "course_list",
+            "course_detail": "course_detail",
+            "graduation_requirements": "graduation_requirements",
+            "module_requirements": "module_requirements",
+            "progress_audit": "progress_audit",
+            "compare_programs": "comparison",
+            "course_planning": "course_plan",
+            "curriculum_feasibility": "feasibility",
+            "policy": "policy_explanation",
+            "general": "policy_explanation",
+        }
+        requested_outputs = (fallback_outputs[intent],)
     if (
         intent == "course_query"
         and courses
@@ -214,6 +229,7 @@ def normalize(
         "curriculum_feasibility",
     }
     missing: list[str] = []
+    unsupported_outputs: list[RequestedOutput] = []
     if intent in structured and cohort is None:
         missing.append("cohort")
     if intent in structured and not programs:
@@ -236,11 +252,64 @@ def normalize(
         missing.append("module")
     if draft.information_scope == "actual_offerings":
         warnings.append("当前数据描述培养方案，而非实时开课或名额；实际选课以教务系统为准。")
+        # A live-offering request must not silently reuse curriculum data, but
+        # an independent policy clause in the same question can still be
+        # answered from the versioned policy corpus.
+        unsupported_outputs.extend(
+            output for output in requested_outputs if output != "policy_explanation"
+        )
+
+    # A normal course/requirement/audit operation is scoped to one program.
+    # Multiple programs must use the comparison capability; never silently use
+    # ``program_ids[0]`` for the other output types.
+    single_program_outputs = {
+        "course_list",
+        "course_detail",
+        "module_requirements",
+        "graduation_requirements",
+        "progress_audit",
+        "course_plan",
+        "feasibility",
+    }
+    if len(programs) > 1:
+        if intent != "compare_programs":
+            unsupported_outputs.extend(
+                output for output in requested_outputs if output in single_program_outputs
+            )
+        else:
+            unsupported_outputs.extend(
+                output
+                for output in requested_outputs
+                if output in single_program_outputs
+            )
+        if any(output in single_program_outputs for output in requested_outputs):
+            warnings.append("multiple_programs_require_comparison_or_explicit_scope")
+
+    # ``get_course_detail`` accepts one course.  A list request may still carry
+    # several course mentions, but a detail output must be explicit about which
+    # one it is answering.
+    mentioned_course_count = max(
+        len(courses),
+        len(dict.fromkeys((*draft.course_codes, *draft.course_mentions))),
+    )
+    if "course_detail" in requested_outputs and mentioned_course_count > 1:
+        unsupported_outputs.append("course_detail")
+        warnings.append("multiple_courses_require_course_list_or_explicit_course")
+
+    allowed_policy_topics = {topic for topic, _markers in POLICY_TOPIC_KEYWORDS}
+    policy_topics = tuple(
+        dict.fromkeys(
+            topic
+            for topic in (*draft.policy_topics, *policy_topics_for_question(question))
+            if topic in allowed_policy_topics
+        )
+    )
 
     return NormalizedQuery(
         raw_question=question,
         intent=intent,
         requested_outputs=requested_outputs,
+        policy_topics=policy_topics,
         cohort=cohort,
         program_ids=tuple(item.canonical_id for item in programs),
         program_names=tuple(item.canonical_name for item in programs),
@@ -258,6 +327,7 @@ def normalize(
         comparison_dimensions=draft.comparison_dimensions,
         information_scope=draft.information_scope,
         missing_fields=tuple(dict.fromkeys(missing)),
+        unsupported_outputs=tuple(dict.fromkeys(unsupported_outputs)),
         warnings=tuple(dict.fromkeys(warnings)),
     )
 

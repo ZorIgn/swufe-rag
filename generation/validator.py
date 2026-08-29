@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 
 from evidence.models import (
+    ClaimAtom,
+    ClaimComparator,
     ClaimSpan,
     ClaimValidation,
     DerivedFact,
@@ -19,7 +21,15 @@ NUMBER_RE = re.compile(r"(?<![A-Za-z])\d+(?:\.\d+)?")
 COURSE_CODE_RE = re.compile(r"\b[A-Z]{2,6}\d{2,4}\b", re.I)
 LATIN_TERM_RE = re.compile(r"[A-Za-z0-9]{2,}")
 CHINESE_RUN_RE = re.compile(r"[\u3400-\u9fff]{2,}")
-SCHOOL_FACT_TYPES = frozenset({"course", "requirement", "progress", "comparison", "policy"})
+COMPARATOR_MARKERS: dict[ClaimComparator, tuple[str, ...]] = {
+    "equals": (),
+    "contains": ("包含", "包括", "含有", "涉及"),
+    "at_least": ("至少", "不少于", "最低", "不低于"),
+    "at_most": ("至多", "不超过", "最高", "不高于"),
+    "before": ("之前", "以前", "早于", "不晚于"),
+    "after": ("之后", "以后", "晚于", "不早于"),
+    "satisfies": (),
+}
 PREDICATE_LANGUAGE = {
     "name": "课程名称",
     "code": "课程代码",
@@ -69,8 +79,132 @@ def _fact_support(
     return evidence_ids, missing_inputs
 
 
-def _is_school_factual(facts: list[Fact | DerivedFact]) -> bool:
-    return any(fact.type in SCHOOL_FACT_TYPES or bool(fact.source_record_ids) for fact in facts)
+def _requires_evidence(facts: list[Fact | DerivedFact]) -> bool:
+    """Return whether a claim makes an external factual assertion.
+
+    Fact roles are opt-out rather than type allowlists.  A new fact type is
+    therefore factual by default, and can bypass grounding only when the tool
+    author explicitly marks it as process metadata/non-factual.
+    """
+
+    return any(fact.role == "factual" for fact in facts)
+
+
+def _canonical_value(value: object) -> object:
+    if isinstance(value, float):
+        return float(f"{value:g}")
+    if isinstance(value, list):
+        return tuple(_canonical_value(item) for item in value)
+    return value
+
+
+def _comparator_mentioned(comparator: ClaimComparator, text: str) -> bool:
+    markers = COMPARATOR_MARKERS[comparator]
+    return not markers or any(marker in text for marker in markers)
+
+
+def _atom_bound_facts(
+    atom: ClaimAtom, facts_by_id: dict[str, Fact | DerivedFact]
+) -> tuple[list[Fact | DerivedFact], list[str]]:
+    """Resolve and verify the exact fact binding declared by an atom."""
+
+    reasons: list[str] = []
+    if not atom.fact_ids:
+        return [], ["claim_atom_missing_fact_binding"]
+    bound: list[Fact | DerivedFact] = []
+    for fact_id in atom.fact_ids:
+        fact = facts_by_id.get(fact_id)
+        if fact is None:
+            reasons.append("claim_atom_unknown_fact")
+            continue
+        bound.append(fact)
+        if fact.subject != atom.subject:
+            reasons.append("claim_atom_subject_mismatch")
+        if fact.predicate != atom.predicate:
+            reasons.append("claim_atom_predicate_mismatch")
+        if fact.comparator != atom.comparator:
+            reasons.append("claim_atom_comparator_mismatch")
+        if _canonical_value(fact.value) != _canonical_value(atom.value):
+            reasons.append("claim_atom_value_mismatch")
+        if fact.unit != atom.unit:
+            reasons.append("claim_atom_unit_mismatch")
+        if fact.conditions != atom.conditions:
+            reasons.append("claim_atom_conditions_mismatch")
+        if fact.exceptions != atom.exceptions:
+            reasons.append("claim_atom_exceptions_mismatch")
+        if fact.scope != atom.scope:
+            reasons.append("claim_atom_scope_mismatch")
+        if fact.temporal != atom.temporal:
+            reasons.append("claim_atom_temporal_mismatch")
+    return bound, reasons
+
+
+def _normalized_text(value: object) -> str:
+    return re.sub(r"\s+", "", str(value or "")).lower()
+
+
+def _value_mentioned(text: str, value: object) -> bool:
+    if isinstance(value, (int, float)):
+        target = f"{float(value):g}"
+        return target in {f"{float(item):g}" for item in NUMBER_RE.findall(text)}
+    if isinstance(value, list):
+        return all(_value_mentioned(text, item) for item in value)
+    raw = str(value).strip()
+    if not raw:
+        return True
+    if COURSE_CODE_RE.fullmatch(raw):
+        return raw.upper() in {item.upper() for item in COURSE_CODE_RE.findall(text)}
+    # A long excerpt may be rendered with an intentional display truncation.
+    # For it, semantic coverage is checked by the source/evidence path below.
+    return len(raw) > 120 or _normalized_text(raw) in _normalized_text(text)
+
+
+def _atom_text_reasons(atom: ClaimAtom, text: str) -> list[str]:
+    """Ensure rendered wording did not drop an atom's key qualifier."""
+
+    reasons: list[str] = []
+    if not _value_mentioned(text, atom.value):
+        reasons.append("claim_text_atom_value_mismatch")
+    if not _comparator_mentioned(atom.comparator, text):
+        reasons.append("claim_text_atom_comparator_missing")
+    rendered_unit = {"credits": "学分", "semester": "学期"}.get(atom.unit or "", atom.unit)
+    if rendered_unit and _normalized_text(rendered_unit) not in _normalized_text(text):
+        reasons.append("claim_text_atom_unit_missing")
+    for condition in atom.conditions:
+        if _normalized_text(condition) not in _normalized_text(text):
+            reasons.append("claim_text_atom_condition_missing")
+    for exception in atom.exceptions:
+        if _normalized_text(exception) not in _normalized_text(text):
+            reasons.append("claim_text_atom_exception_missing")
+    if atom.scope and _normalized_text(atom.scope) not in _normalized_text(text):
+        reasons.append("claim_text_atom_scope_missing")
+    if atom.temporal and _normalized_text(atom.temporal) not in _normalized_text(text):
+        reasons.append("claim_text_atom_temporal_missing")
+    return reasons
+
+
+def _evidence_supports_atom(atom: ClaimAtom, evidence_id: str, packet: EvidencePacket) -> bool:
+    """Require one cited span to cover an atom's value and all qualifiers.
+
+    This is a deterministic structural gate, not a claim that lexical matching
+    is full natural-language entailment.  Catalog-field facts additionally
+    rely on their field-verification lineage at build time.
+    """
+
+    evidence = packet.evidence_by_id(evidence_id)
+    if evidence is None:
+        return False
+    quote = evidence.quote
+    if not _value_mentioned(quote, atom.value):
+        return False
+    if not _comparator_mentioned(atom.comparator, quote):
+        return False
+    return all(
+        _normalized_text(item) in _normalized_text(quote)
+        for item in (*atom.conditions, *atom.exceptions)
+    ) and (atom.scope is None or _normalized_text(atom.scope) in _normalized_text(quote)) and (
+        atom.temporal is None or _normalized_text(atom.temporal) in _normalized_text(quote)
+    )
 
 
 def _allowed_strings(facts: list[Fact | DerivedFact]) -> tuple[set[str], set[str]]:
@@ -142,11 +276,29 @@ def _claim_supported_by_text(
     return len(claim_terms & supporting_terms) / len(claim_terms) >= 0.60
 
 
-def _citation_supports_claim(claim_text: str, evidence_id: str, packet: EvidencePacket) -> bool:
+def _citation_supports_claim(
+    claim_text: str,
+    evidence_id: str,
+    packet: EvidencePacket,
+    facts: list[Fact | DerivedFact],
+) -> bool:
     evidence = packet.evidence_by_id(evidence_id)
-    return evidence is not None and bool(
-        _entailment_terms(claim_text) & _entailment_terms(evidence.quote)
-    )
+    if evidence is None:
+        return False
+    # A rule-evaluation conclusion (for example, "可行") is deliberately not
+    # expected to occur verbatim in a curriculum PDF.  Its atom and complete
+    # input-fact graph are checked elsewhere in this validator; requiring a
+    # lexical overlap here would turn that valid proof into a false refusal.
+    # This exception is narrow: mixed/observed claims still need direct lexical
+    # support from each cited evidence span.
+    if facts and all(
+        isinstance(fact, DerivedFact) and fact.operator == "rule_evaluation" for fact in facts
+    ):
+        return all(
+            evidence_id in _fact_support(packet, fact.fact_id)[0]
+            for fact in facts
+        )
+    return bool(_entailment_terms(claim_text) & _entailment_terms(evidence.quote))
 
 
 def _untrusted_reachable_evidence(
@@ -240,6 +392,7 @@ class ClaimValidator:
             if not span.fact_ids or any(fact is None for fact in resolved):
                 reasons.append("unknown_or_missing_fact")
             facts = [fact for fact in resolved if fact is not None]
+            facts_by_id = {fact.fact_id: fact for fact in facts}
             valid_evidence: set[str] = set()
             missing_inputs: set[str] = set()
             for fact in facts:
@@ -253,7 +406,45 @@ class ClaimValidator:
             if any(packet.evidence_by_id(evidence_id) is None for evidence_id in provided_evidence):
                 reasons.append("evidence_record_missing")
 
-            if _is_school_factual(facts):
+            factual = _requires_evidence(facts)
+            atoms_by_fact: dict[str, list[ClaimAtom]] = {}
+            if factual and not span.atoms:
+                reasons.append("claim_semantics_missing")
+            for atom in span.atoms:
+                if not set(atom.fact_ids).issubset(set(span.fact_ids)):
+                    reasons.append("claim_atom_not_bound_to_claim_fact")
+                bound_facts, atom_reasons = _atom_bound_facts(atom, facts_by_id)
+                reasons.extend(atom_reasons)
+                for fact in bound_facts:
+                    atoms_by_fact.setdefault(fact.fact_id, []).append(atom)
+                if factual:
+                    if not atom.evidence_ids:
+                        reasons.append("claim_atom_missing_evidence_binding")
+                    if not set(atom.evidence_ids).issubset(provided_evidence):
+                        reasons.append("claim_atom_evidence_not_bound_to_claim")
+                    for fact in bound_facts:
+                        reachable, _ = _fact_support(packet, fact.fact_id)
+                        if not set(atom.evidence_ids).issubset(reachable):
+                            reasons.append("claim_atom_evidence_not_reachable")
+                    # A rule-evaluation atom describes a conclusion rather
+                    # than verbatim source wording (for example "可行"). Its
+                    # support is validated through the required input-fact
+                    # graph; demanding the conclusion literal in a source PDF
+                    # would reject every legitimate computation.  Observed
+                    # and retrieved atoms still require one span to cover the
+                    # atom itself.
+                    if any(not isinstance(fact, DerivedFact) for fact in bound_facts) and not all(
+                        _evidence_supports_atom(atom, evidence_id, packet)
+                        for evidence_id in atom.evidence_ids
+                    ):
+                        reasons.append("claim_atom_evidence_span_mismatch")
+                    reasons.extend(_atom_text_reasons(atom, span.text))
+            if factual and any(
+                fact.role == "factual" and fact.fact_id not in atoms_by_fact for fact in facts
+            ):
+                reasons.append("claim_fact_missing_semantic_atom")
+
+            if factual:
                 if missing_inputs:
                     reasons.append("derived_fact_input_missing")
                 if not _facts_share_record(facts):
@@ -283,10 +474,10 @@ class ClaimValidator:
                 reasons.append("number_not_bound_to_claim_fact")
             if not mentioned_codes.issubset(codes):
                 reasons.append("course_code_not_bound_to_claim_fact")
-            if _is_school_factual(facts) and not _claim_supported_by_text(span.text, facts, packet):
+            if factual and not _claim_supported_by_text(span.text, facts, packet):
                 reasons.append("claim_not_entailed_by_fact")
             if provided_evidence and any(
-                not _citation_supports_claim(span.text, identifier, packet)
+                not _citation_supports_claim(span.text, identifier, packet, facts)
                 for identifier in provided_evidence
             ):
                 reasons.append("citation_not_supporting_claim")

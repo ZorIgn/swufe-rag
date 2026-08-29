@@ -12,7 +12,7 @@ from evidence.models import (
     FinalAnswer,
     ToolExecutionResult,
 )
-from query.schemas import ExecutionPlan, NormalizedQuery, UnderstandingDraft
+from query.schemas import ExecutionPlan, NormalizedQuery, OutputContract, UnderstandingDraft
 
 
 class AgentStatus(str, Enum):
@@ -62,6 +62,7 @@ class AgentState:
     understanding: UnderstandingDraft | None = None
     normalized_query: NormalizedQuery | None = None
     plan: ExecutionPlan | None = None
+    output_contracts: list[OutputContract] = field(default_factory=list)
     tool_calls: list[str] = field(default_factory=list)
     tool_results: list[ToolExecutionResult] = field(default_factory=list)
     evidence: EvidencePacket | None = None

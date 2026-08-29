@@ -44,9 +44,7 @@ class _SentenceEncoder(Protocol):
 
 
 class _SentenceTransformerFactory(Protocol):
-    def __call__(
-        self, model_name: str, *, local_files_only: bool = False
-    ) -> _SentenceEncoder: ...
+    def __call__(self, model_name: str, *, local_files_only: bool = False) -> _SentenceEncoder: ...
 
 
 class DenseFaissIndex:
@@ -62,13 +60,36 @@ class DenseFaissIndex:
         dimension: int,
         vectors: np.ndarray,
     ) -> None:
+        if dimension <= 0:
+            raise DenseUnavailableError("dense embedding dimension must be positive")
+        if not chunk_ids or len(set(chunk_ids)) != len(chunk_ids):
+            raise DenseUnavailableError("dense document ids are empty or duplicated")
         self.model_name = model_name
         self.chunk_ids = chunk_ids
         self._index = index
         self._encoder = encoder
         self.dimension = dimension
-        self._vectors = vectors
+        self._vectors = self._validated_vectors(
+            vectors, chunk_count=len(chunk_ids), dimension=dimension
+        )
         self._positions = {identifier: index for index, identifier in enumerate(chunk_ids)}
+
+    @staticmethod
+    def _validated_vectors(vectors: np.ndarray, *, chunk_count: int, dimension: int) -> np.ndarray:
+        """Validate the normalized row vectors used as the scoped rank oracle."""
+
+        try:
+            value = np.asarray(vectors, dtype="float32")
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise DenseUnavailableError("dense vectors are not a numeric matrix") from exc
+        if value.shape != (chunk_count, dimension):
+            raise DenseUnavailableError("dense vectors do not match dense document ids")
+        if not np.isfinite(value).all():
+            raise DenseUnavailableError("dense vectors contain non-finite values")
+        norms = np.linalg.norm(value, axis=1)
+        if not np.isfinite(norms).all() or not np.allclose(norms, 1.0, rtol=1e-4, atol=1e-5):
+            raise DenseUnavailableError("dense vectors must be finite, non-zero, normalized rows")
+        return value
 
     @staticmethod
     def _dependencies() -> tuple[_FaissModule, _SentenceTransformerFactory]:
@@ -172,6 +193,28 @@ class DenseFaissIndex:
         position = self._positions.get(chunk_id)
         return None if position is None else self._vectors[position]
 
+    def _query_vector(self, query: str) -> np.ndarray:
+        """Encode exactly one finite, normalized query vector for inner products."""
+
+        try:
+            encoded = self._encoder.encode(
+                [query], normalize_embeddings=True, show_progress_bar=False
+            )
+            vector = np.asarray(encoded, dtype="float32")
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise DenseUnavailableError("dense query embedding is not numeric") from exc
+        if vector.shape != (1, self.dimension):
+            raise DenseUnavailableError(
+                "dense query embedding shape does not match the configured dimension"
+            )
+        if not np.isfinite(vector).all():
+            raise DenseUnavailableError("dense query embedding contains non-finite values")
+        query_vector = vector[0]
+        norm = float(np.linalg.norm(query_vector))
+        if not np.isfinite(norm) or not np.isclose(norm, 1.0, rtol=1e-4, atol=1e-5):
+            raise DenseUnavailableError("dense query embedding must be finite and normalized")
+        return query_vector
+
     def rank(
         self,
         query: str,
@@ -180,33 +223,45 @@ class DenseFaissIndex:
         *,
         limit: int,
     ) -> tuple[RetrievedCandidate, ...]:
-        vector = np.asarray(
-            self._encoder.encode([query], normalize_embeddings=True, show_progress_bar=False),
-            dtype="float32",
+        if limit <= 0 or not candidate_ids:
+            return ()
+
+        # Scope is a correctness boundary, not an over-fetch heuristic.  Map
+        # only in-scope IDs to their immutable vectors.npy rows before scoring.
+        # Missing vector/document IDs are ignored deterministically so a stale
+        # caller cannot turn a retrieval request into a KeyError.
+        scoped = sorted(
+            (identifier, self._positions[identifier])
+            for identifier in candidate_ids
+            if identifier in self._positions and identifier in documents
         )
-        scores, positions = self._index.search(
-            vector, min(len(self.chunk_ids), max(limit * 8, limit))
-        )
-        ranked: list[RetrievedCandidate] = []
-        for score, position in zip(scores[0], positions[0], strict=True):
-            if position < 0:
-                continue
-            identifier = self.chunk_ids[int(position)]
-            if identifier not in candidate_ids:
-                continue
-            document = documents[identifier]
-            ranked.append(
-                RetrievedCandidate(
-                    chunk_id=identifier,
-                    text=str(document.get("text", "")),
-                    metadata=document,
-                    dense_score=float(score),
-                    dense_rank=len(ranked) + 1,
-                )
+        if not scoped:
+            return ()
+
+        vector = self._query_vector(query)
+        identifiers = tuple(identifier for identifier, _position in scoped)
+        positions = np.asarray([position for _identifier, position in scoped], dtype=np.intp)
+        scores = self._vectors[positions] @ vector
+        if not np.isfinite(scores).all():
+            raise DenseUnavailableError("scoped dense scores contain non-finite values")
+
+        # Python sorting makes equal cosine scores deterministic across FAISS,
+        # NumPy, and platform versions.  We deliberately do not call
+        # ``self._index.search`` here: global top-N followed by filtering can
+        # erase the best document in a narrow scope.
+        ranked = sorted(
+            zip(identifiers, scores, strict=True), key=lambda item: (-float(item[1]), item[0])
+        )[:limit]
+        return tuple(
+            RetrievedCandidate(
+                chunk_id=identifier,
+                text=str(documents[identifier].get("text", "")),
+                metadata=documents[identifier],
+                dense_score=float(score),
+                dense_rank=rank,
             )
-            if len(ranked) >= limit:
-                break
-        return tuple(ranked)
+            for rank, (identifier, score) in enumerate(ranked, start=1)
+        )
 
 
 __all__ = ["DenseFaissIndex", "DenseUnavailableError"]

@@ -23,6 +23,13 @@ class SourceRecord:
     page_url: str
     file_url: str
     collected_at: str
+    # These fields are deliberately source-owned rather than inferred from
+    # parsed prose.  Legacy registries receive fail-closed defaults from
+    # ``load_sources``.
+    doc_type: str = "unknown"
+    topics: tuple[str, ...] = ()
+    source_sha256: str | None = None
+    authenticity_status: str = "unverified"
 
     def resolve(self, raw_dir: str | Path) -> Path:
         return Path(raw_dir).joinpath(*self.file.split("/"))

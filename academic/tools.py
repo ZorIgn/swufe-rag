@@ -32,6 +32,7 @@ from query.schemas import (
 )
 from retrieval.hybrid import HybridPolicyRetriever
 from retrieval.models import PolicyRetrievalRequest, PolicyRetriever
+from retrieval.scope import policy_scope_matches
 
 ReviewStatus = Literal["verified", "review_required", "unverified"]
 
@@ -416,6 +417,7 @@ class AcademicTools:
                     subject=str(row["module_name"]),
                     predicate="required_credits",
                     value=value,
+                    comparator="at_least" if isinstance(value, (int, float)) else "equals",
                     unit="credits",
                     source_record_ids=(str(row["record_id"]),),
                     evidence_ids=evidence_ids,
@@ -642,6 +644,7 @@ class AcademicTools:
         )
         registry = EvidenceRegistry()
         facts: list[Fact] = []
+        covered_dimensions: set[tuple[str, str]] = set()
         raw_programs = result.get("programs", {})
         if not isinstance(raw_programs, Mapping):
             raise TypeError("program comparison result has non-mapping programs")
@@ -668,11 +671,14 @@ class AcademicTools:
                             subject=programs.get(program_id, program_id),
                             predicate="module_required_credits",
                             value=_as_float(value),
+                            comparator="at_least",
                             unit="credits",
                             source_record_ids=(str(row["record_id"]),),
                             evidence_ids=(evidence_id,) if evidence_id else (),
                         )
                     )
+                    if evidence_id and "module_requirements" in dimensions:
+                        covered_dimensions.add(("module_requirements", program_id))
         if "graduation_min_credits" in dimensions:
             raw_totals = result.get("graduation_min_credits", {})
             canonical_totals = (
@@ -683,6 +689,9 @@ class AcademicTools:
             for program_id in operation.args.program_ids:
                 subject = programs.get(program_id, program_id)
                 inputs = tuple(fact for fact in facts if fact.subject == subject)
+                input_evidence = tuple(
+                    dict.fromkeys(item for fact in inputs for item in fact.evidence_ids)
+                )
                 if program_id in canonical_totals:
                     facts.append(
                         Fact(
@@ -693,13 +702,14 @@ class AcademicTools:
                             subject=subject,
                             predicate="graduation_min_credits",
                             value=canonical_totals[program_id],
+                            comparator="at_least",
                             unit="credits",
-                            evidence_ids=tuple(
-                                dict.fromkeys(item for fact in inputs for item in fact.evidence_ids)
-                            ),
+                            evidence_ids=input_evidence,
                             derivation="observed",
                         )
                     )
+                    if input_evidence:
+                        covered_dimensions.add(("graduation_min_credits", program_id))
                 elif inputs:
                     facts.append(
                         DerivedFact(
@@ -713,9 +723,7 @@ class AcademicTools:
                                 if isinstance(fact.value, (int, float))
                             ),
                             unit="credits",
-                            evidence_ids=tuple(
-                                dict.fromkeys(item for fact in inputs for item in fact.evidence_ids)
-                            ),
+                            evidence_ids=input_evidence,
                             operator="sum",
                             input_fact_ids=tuple(fact.fact_id for fact in inputs),
                         )
@@ -748,6 +756,29 @@ class AcademicTools:
                 return (
                     tuple(dict.fromkeys(record_ids)),
                     tuple(dict.fromkeys(evidence_ids)),
+                )
+
+            def fully_supported(selected: Mapping[str, Iterable[str]]) -> bool:
+                found = False
+                for program_id, course_keys in selected.items():
+                    for course_key in course_keys:
+                        records = records_by_program.get(program_id, {}).get(course_key, [])
+                        if not records:
+                            return False
+                        found = True
+                        for record in records:
+                            if not self._evidence_for_record(record, registry):
+                                return False
+                return found
+
+            catalog_ready = {
+                program_id
+                for program_id, records in records_by_program.items()
+                if fully_supported({program_id: tuple(records)})
+            }
+            if "course_sets" in dimensions:
+                covered_dimensions.update(
+                    ("course_sets", program_id) for program_id in catalog_ready
                 )
 
             intersection = _string_list(result.get("intersection", []))
@@ -788,31 +819,73 @@ class AcademicTools:
                         )
                     )
             if "required_courses" in dimensions:
-                facts.append(
-                    Fact(
-                        fact_id=stable_id(
-                            "fact", operation.operation_id, "required_course_difference"
-                        ),
-                        type="comparison",
-                        subject="programs",
-                        predicate="required_course_difference",
-                        value=_string_list(result.get("required_course_difference", [])),
-                    )
+                raw_required = result.get("required_courses_by_program", {})
+                required_by_program = (
+                    raw_required if isinstance(raw_required, Mapping) else {}
                 )
+                for program_id in operation.args.program_ids:
+                    values = _string_list(required_by_program.get(program_id, []))
+                    if not values:
+                        continue
+                    selected = {program_id: values}
+                    record_ids, evidence_ids = course_support(selected)
+                    facts.append(
+                        Fact(
+                            fact_id=stable_id(
+                                "fact", operation.operation_id, program_id, "required_courses"
+                            ),
+                            type="comparison",
+                            subject=programs.get(program_id, program_id),
+                            predicate="required_courses",
+                            value=values,
+                            source_record_ids=record_ids,
+                            evidence_ids=evidence_ids,
+                        )
+                    )
+                    if fully_supported(selected):
+                        covered_dimensions.add(("required_courses", program_id))
             if "practice_requirements" in dimensions:
-                facts.append(
-                    Fact(
-                        fact_id=stable_id("fact", operation.operation_id, "practice_courses"),
-                        type="comparison",
-                        subject="programs",
-                        predicate="practice_requirements",
-                        value=_string_list(result.get("practice_requirements", [])),
-                    )
+                raw_practice = result.get("practice_requirements_by_program", {})
+                practice_by_program = (
+                    raw_practice if isinstance(raw_practice, Mapping) else {}
                 )
-        trusted = all(
-            evidence.provenance.review_status is EvidenceTrust.VERIFIED
-            for evidence in registry.values()
-        ) and bool(facts)
+                for program_id in operation.args.program_ids:
+                    values = _string_list(practice_by_program.get(program_id, []))
+                    if not values:
+                        continue
+                    selected = {program_id: values}
+                    record_ids, evidence_ids = course_support(selected)
+                    facts.append(
+                        Fact(
+                            fact_id=stable_id(
+                                "fact", operation.operation_id, program_id, "practice_requirements"
+                            ),
+                            type="comparison",
+                            subject=programs.get(program_id, program_id),
+                            predicate="practice_requirements",
+                            value=values,
+                            source_record_ids=record_ids,
+                            evidence_ids=evidence_ids,
+                        )
+                    )
+                    if fully_supported(selected):
+                        covered_dimensions.add(("practice_requirements", program_id))
+        expected_dimensions = {
+            (dimension, program_id)
+            for dimension in dimensions
+            for program_id in operation.args.program_ids
+        }
+        missing_dimensions = sorted(expected_dimensions - covered_dimensions)
+        complete = bool(expected_dimensions) and not missing_dimensions
+        trusted = (
+            complete
+            and bool(registry.values())
+            and all(
+                evidence.provenance.review_status is EvidenceTrust.VERIFIED
+                for evidence in registry.values()
+            )
+            and all(fact.evidence_ids for fact in facts)
+        )
         return EvidencePacket(
             packet_id=stable_id("packet", operation.operation_id),
             facts=tuple(facts),
@@ -821,14 +894,18 @@ class AcademicTools:
                 operation.operation_id,
                 "academic.compare_programs",
                 "comparison",
-                complete=bool(facts),
-                expected_count=len(operation.args.program_ids),
-                returned_count=len({fact.subject for fact in facts}),
+                complete=complete,
+                expected_count=len(expected_dimensions),
+                returned_count=len(expected_dimensions & covered_dimensions),
                 authoritative=True,
                 scope_matched=True,
                 version_resolved=True,
                 conflict_free=True,
                 trusted_evidence=trusted,
+                reasons=tuple(
+                    f"missing_dimension:{dimension}:{program_id}"
+                    for dimension, program_id in missing_dimensions
+                ),
             ),
         )
 
@@ -848,8 +925,17 @@ class AcademicTools:
         registry = EvidenceRegistry()
         facts: list[Fact] = []
         rows: list[dict[str, object]] = []
+        out_of_scope = False
         for candidate in result.candidates:
             row = dict(candidate.metadata)
+            if not policy_scope_matches(
+                row,
+                cohort=args.cohort,
+                program_ids=args.program_ids,
+                college_ids=args.college_ids,
+            ):
+                out_of_scope = True
+                continue
             rows.append(row)
             evidence_id = _evidence_from_stored(
                 row, record_id=str(candidate.chunk_id), registry=registry
@@ -868,6 +954,18 @@ class AcademicTools:
             )
         conflicts = self.repository.policy_conflicts(rows) if rows else ()
         trusted = bool(rows) and all(str(row.get("review_status")) == "verified" for row in rows)
+        warnings = tuple(
+            dict.fromkeys(
+                (
+                    *result.warnings,
+                    *(
+                        ("retriever_returned_out_of_scope",)
+                        if out_of_scope
+                        else ()
+                    ),
+                )
+            )
+        )
         coverage = _component(
             operation.operation_id,
             "policy.search",
@@ -877,15 +975,15 @@ class AcademicTools:
             returned_count=len(facts),
             authoritative=bool(rows)
             and all(_int_or_zero(row.get("authority_level")) >= 1 for row in rows),
-            scope_matched=bool(rows),
+            scope_matched=bool(rows) and not out_of_scope,
             version_resolved=bool(rows) and not conflicts,
             conflict_free=not conflicts,
             trusted_evidence=trusted,
             reasons=tuple(
                 dict.fromkeys(
-                    (*result.warnings, "policy_support_insufficient")
+                    (*warnings, "policy_support_insufficient")
                     if not facts
-                    else result.warnings
+                    else warnings
                 )
             ),
         )
@@ -895,7 +993,7 @@ class AcademicTools:
             evidence=registry.values(),
             coverage=coverage,
             conflicts=tuple(conflicts),
-            warnings=tuple(result.warnings),
+            warnings=warnings,
         )
 
     def resolve_source(self, operation: ResolveSourceOperation) -> EvidencePacket:

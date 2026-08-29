@@ -43,7 +43,10 @@ def main() -> None:
         "--output-root", type=Path, default=Path("artifacts/retrieval")
     )
     parser.add_argument(
-        "--dataset-manifest-dir", type=Path, default=Path("artifacts/manifests")
+        "--dataset-manifest",
+        type=Path,
+        required=True,
+        help="explicit compatibility dataset manifest to update after validation",
     )
     parser.add_argument("--reranker-model", default="BAAI/bge-reranker-base")
     args = parser.parse_args()
@@ -92,7 +95,7 @@ def main() -> None:
         ):
             raise RuntimeError("legacy FAISS rows do not match vectors.npy")
 
-    dataset_manifest_path = args.dataset_manifest_dir / f"{dataset_version}.json"
+    dataset_manifest_path = args.dataset_manifest
     dataset_manifest = json.loads(dataset_manifest_path.read_text(encoding="utf-8"))
     if str(dataset_manifest.get("dataset_version") or "") != dataset_version:
         raise RuntimeError("dataset manifest version does not match the database")

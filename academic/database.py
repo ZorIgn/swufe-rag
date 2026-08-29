@@ -15,13 +15,22 @@ from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from hashlib import sha256
 from pathlib import Path
 from threading import RLock
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 from evidence.provenance import PARSER_VERSION, stable_id
+from ingest.contracts import (
+    DOC_TYPES,
+    EXTRACTION_QUALITY_STATUSES,
+    POLICY_DOCUMENT_TYPES,
+    POLICY_TOPICS,
+    SOURCE_AUTHENTICITY_STATUSES,
+)
 from query.schemas import ResolvedEntity
+from retrieval.scope import policy_scope_matches
 
 ROOT = Path(__file__).parents[1]
 DEFAULT_DATABASE = ROOT / "data" / "academic.sqlite3"
@@ -33,12 +42,14 @@ DEFAULT_SOURCE_REVIEW = ROOT / "data" / "source_review.csv"
 DEFAULT_EVIDENCE_REVIEW = ROOT / "data" / "evidence_review.csv"
 
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 REVIEW_STATUSES = frozenset({"verified", "review_required", "unverified"})
 VERIFIED_SOURCE_REVIEW_DECISIONS = frozenset(
     {"include", "include_ocr", "include_converted", "include_split"}
 )
 VERIFIED_EVIDENCE_REVIEW_DECISIONS = frozenset({"verified", "include"})
+STRICT_COURSE_FIELDS = ("module", "credits", "semester", "nature")
+STRICT_REQUIREMENT_FIELDS = ("module", "required_credits")
 
 
 class DataIntegrityError(ValueError):
@@ -55,6 +66,20 @@ CREATE TABLE sources (
   status TEXT NOT NULL, page_url TEXT, file_url TEXT, source_sha256 TEXT,
   collected_at TEXT, UNIQUE(title, cohort, file_url)
 );
+CREATE TABLE source_taxonomy (
+  source_id TEXT PRIMARY KEY REFERENCES sources(source_id),
+  doc_type TEXT NOT NULL,
+  topics_json TEXT NOT NULL
+);
+CREATE INDEX idx_source_taxonomy_type ON source_taxonomy(doc_type);
+CREATE TABLE source_authenticity (
+  source_id TEXT PRIMARY KEY REFERENCES sources(source_id),
+  declared_sha256 TEXT,
+  observed_sha256 TEXT,
+  authenticity_status TEXT NOT NULL,
+  review_decision TEXT
+);
+CREATE INDEX idx_source_authenticity_status ON source_authenticity(authenticity_status);
 CREATE TABLE programs (
   program_id TEXT PRIMARY KEY, canonical_name TEXT NOT NULL, college_id TEXT NOT NULL,
   cohort INTEGER NOT NULL, source_id TEXT NOT NULL REFERENCES sources(source_id),
@@ -89,6 +114,12 @@ CREATE TABLE source_sections (
   review_status TEXT NOT NULL
 );
 CREATE INDEX idx_section_source ON source_sections(source_id, physical_page);
+CREATE TABLE section_extraction_quality (
+  chunk_id TEXT PRIMARY KEY REFERENCES source_sections(chunk_id),
+  extraction_quality TEXT NOT NULL,
+  warnings_json TEXT NOT NULL
+);
+CREATE INDEX idx_section_quality_status ON section_extraction_quality(extraction_quality);
 CREATE TABLE program_courses (
   record_id TEXT PRIMARY KEY, program_id TEXT NOT NULL REFERENCES programs(program_id),
   module_id TEXT NOT NULL REFERENCES modules(module_id), course_id TEXT NOT NULL REFERENCES courses(course_id),
@@ -108,6 +139,22 @@ CREATE TABLE requirements (
   confidence REAL NOT NULL, review_status TEXT NOT NULL
 );
 CREATE INDEX idx_requirements_program ON requirements(program_id, module_id);
+CREATE TABLE field_verifications (
+  entity_type TEXT NOT NULL,
+  record_id TEXT NOT NULL,
+  field_name TEXT NOT NULL,
+  source_id TEXT NOT NULL REFERENCES sources(source_id),
+  source_sha256 TEXT,
+  chunk_id TEXT REFERENCES source_sections(chunk_id),
+  physical_page INTEGER,
+  table_row INTEGER,
+  cell_ref TEXT,
+  text_span TEXT,
+  verification_status TEXT NOT NULL,
+  lineage_json TEXT NOT NULL,
+  PRIMARY KEY(entity_type, record_id, field_name)
+);
+CREATE INDEX idx_field_verification_record ON field_verifications(entity_type, record_id);
 """
 
 
@@ -179,6 +226,68 @@ def _source_scope(value: object) -> str:
     return scope or "不限"
 
 
+def _controlled_doc_type(value: object) -> str:
+    """Return an explicit source type; missing legacy metadata stays unknown."""
+
+    doc_type = str(value or "unknown").strip().lower() or "unknown"
+    if doc_type not in DOC_TYPES:
+        raise DataIntegrityError(
+            f"invalid doc_type: {doc_type!r}; expected one of {sorted(DOC_TYPES)!r}"
+        )
+    return doc_type
+
+
+def _controlled_topics(value: object) -> tuple[str, ...]:
+    """Parse registry topics without using document text as a fallback."""
+
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return ()
+        try:
+            decoded = json.loads(raw)
+        except json.JSONDecodeError:
+            decoded = raw.split(",")
+    else:
+        decoded = value
+    if not isinstance(decoded, (list, tuple)) or any(
+        not isinstance(topic, str) or not topic.strip() for topic in decoded
+    ):
+        raise DataIntegrityError("topics must be a comma-separated string or JSON string list")
+    topics = tuple(topic.strip().lower() for topic in decoded)
+    invalid = sorted(set(topics) - POLICY_TOPICS)
+    if invalid:
+        raise DataIntegrityError(f"invalid topics: {invalid!r}")
+    if len(set(topics)) != len(topics):
+        raise DataIntegrityError("source registry topics must not contain duplicates")
+    return topics
+
+
+def _declared_sha256(value: object) -> str | None:
+    digest = str(value or "").strip().lower()
+    if not digest:
+        return None
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise DataIntegrityError("source_sha256 must be a lowercase SHA-256 hex digest")
+    return digest
+
+
+def _source_authenticity_status(value: object, *, has_digest: bool) -> str:
+    status = str(value or "").strip().lower() or (
+        "review_required" if has_digest else "unverified"
+    )
+    if status not in SOURCE_AUTHENTICITY_STATUSES:
+        raise DataIntegrityError(
+            "invalid authenticity_status: "
+            f"{status!r}; expected one of {sorted(SOURCE_AUTHENTICITY_STATUSES)!r}"
+        )
+    if status == "verified" and not has_digest:
+        raise DataIntegrityError("verified source authenticity requires source_sha256")
+    return status
+
+
 def _review_status(value: object, *, default: str = "unverified") -> str:
     status = str(value or default).strip()
     if status not in REVIEW_STATUSES:
@@ -220,6 +329,40 @@ class EvidenceReview:
     reviewer: str | None = None
     method: str | None = None
     reviewed_at: str | None = None
+
+
+@dataclass(frozen=True)
+class SourceTrust:
+    """The source-owned authenticity and taxonomy state used by the builder."""
+
+    source_sha256: str | None
+    authenticity_status: str
+    doc_type: str
+    topics: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ReconciledRows:
+    """Deterministic duplicate accounting for one catalog entity type."""
+
+    rows: tuple[dict[str, object], ...]
+    input_count: int
+    accepted_count: int
+    exact_duplicate_count: int
+    quarantined_count: int = 0
+
+    def as_metadata(self) -> dict[str, int]:
+        values = {
+            "input": self.input_count,
+            "accepted": self.accepted_count,
+            "exact_duplicates": self.exact_duplicate_count,
+            "quarantined": self.quarantined_count,
+        }
+        if values["input"] != (
+            values["accepted"] + values["exact_duplicates"] + values["quarantined"]
+        ):
+            raise DataIntegrityError(f"reconciliation count conservation violated: {values!r}")
+        return values
 
 
 def _title_key(value: object) -> str:
@@ -349,10 +492,22 @@ def _review_for_source(
 
 def _section_review_status(
     raw_status: object,
-    source_review: SourceReview | None,
+    source_authenticity: str,
+    extraction_quality: str,
     evidence_review: EvidenceReview | None,
 ) -> str:
-    """Use the ledger, never a chunk's self-assertion, to promote verification."""
+    """Keep source authenticity, extraction quality, and review distinct.
+
+    A reviewer may attest that a URL is an authentic school source, but that
+    cannot certify a failed OCR/table extraction.  Likewise a raw chunk's
+    ``verified`` assertion is never enough to promote it.
+    """
+
+    claimed = _review_status(raw_status)
+    if extraction_quality == "failed":
+        return "unverified"
+    if source_authenticity != "verified" or extraction_quality != "verified":
+        return "unverified" if claimed == "unverified" else "review_required"
 
     if evidence_review is not None:
         return (
@@ -360,9 +515,11 @@ def _section_review_status(
             if evidence_review.decision in VERIFIED_EVIDENCE_REVIEW_DECISIONS
             else "unverified"
         )
-    if source_review is not None:
+    # The source review establishes authenticity, while the independently
+    # recorded extraction quality establishes that this section was extracted
+    # acceptably.  Field values still require their own lineage/review below.
+    if source_authenticity == "verified" and extraction_quality == "verified":
         return "verified"
-    claimed = _review_status(raw_status)
     # An external chunk can request a review, but cannot mark itself verified.
     return "review_required" if claimed == "verified" else claimed
 
@@ -370,7 +527,7 @@ def _section_review_status(
 def _structured_review_status(
     evidence: object,
     source_id: str,
-    section_statuses: dict[str, tuple[str, str]],
+    section_statuses: dict[str, tuple[str, str, str]],
 ) -> str:
     """Derive structured-record trust from the exact evidence it references."""
 
@@ -392,23 +549,43 @@ def _evidence_chunk_id(evidence: object) -> str | None:
     return value or None
 
 
+def _extraction_quality(value: object) -> str:
+    quality = str(value or "review_required").strip().lower() or "review_required"
+    if quality not in EXTRACTION_QUALITY_STATUSES:
+        raise DataIntegrityError(
+            "invalid extraction_quality: "
+            f"{quality!r}; expected one of {sorted(EXTRACTION_QUALITY_STATUSES)!r}"
+        )
+    return quality
+
+
+def _extraction_warnings(value: object) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list) or any(
+        not isinstance(item, str) or not item.strip() for item in value
+    ):
+        raise DataIntegrityError("extraction_warnings must be a list of non-empty strings")
+    return tuple(item.strip() for item in value)
+
+
 def _load_sections(
     chunk_file: Path,
     source_ids: dict[tuple[str, str], str],
-    source_rows: list[dict[str, str]],
-    reviews: tuple[SourceReview, ...],
+    source_trusts: dict[str, SourceTrust],
     evidence_reviews: dict[str, EvidenceReview],
-) -> tuple[list[tuple[object, ...]], dict[str, tuple[str, str]]]:
+) -> tuple[
+    list[tuple[object, ...]],
+    list[tuple[object, ...]],
+    dict[str, tuple[str, str, str]],
+]:
     """Materialize source sections and their ledger-derived trust state."""
 
-    reviews_by_source_id = {
-        source_ids[(str(row.get("doc_title") or "").strip(), _source_scope(row.get("cohort")))]: _review_for_source(row, reviews)
-        for row in source_rows
-    }
     sections: list[tuple[object, ...]] = []
-    section_statuses: dict[str, tuple[str, str]] = {}
+    qualities: list[tuple[object, ...]] = []
+    section_statuses: dict[str, tuple[str, str, str]] = {}
     if not chunk_file.is_file():
-        return sections, section_statuses
+        return sections, qualities, section_statuses
     with chunk_file.open(encoding="utf-8") as stream:
         for line_number, line in enumerate(stream, start=1):
             if not line.strip():
@@ -424,12 +601,34 @@ def _load_sections(
                 raise DataIntegrityError(f"chunk line {line_number} has an empty chunk_id")
             if chunk_id in section_statuses:
                 raise DataIntegrityError(f"duplicate chunk_id in chunk file: {chunk_id!r}")
+            trust = source_trusts[source_id]
+            chunk_doc_type = value.get("doc_type")
+            if chunk_doc_type is not None and _controlled_doc_type(chunk_doc_type) != trust.doc_type:
+                raise DataIntegrityError(
+                    "chunk doc_type must exactly match its registered source taxonomy: "
+                    f"chunk_id={chunk_id!r}"
+                )
+            chunk_topics = value.get("topics")
+            if chunk_topics is not None and _controlled_topics(chunk_topics) != trust.topics:
+                raise DataIntegrityError(
+                    "chunk topics must exactly match its registered source taxonomy: "
+                    f"chunk_id={chunk_id!r}"
+                )
+            chunk_sha256 = _declared_sha256(value.get("source_sha256"))
+            if chunk_sha256 is not None and chunk_sha256 != trust.source_sha256:
+                raise DataIntegrityError(
+                    "chunk source_sha256 does not match registered source bytes: "
+                    f"chunk_id={chunk_id!r}"
+                )
+            extraction_quality = _extraction_quality(value.get("extraction_quality"))
+            warnings = _extraction_warnings(value.get("extraction_warnings"))
             review_status = _section_review_status(
                 value.get("review_status"),
-                reviews_by_source_id.get(source_id),
+                trust.authenticity_status,
+                extraction_quality,
                 evidence_reviews.get(chunk_id),
             )
-            section_statuses[chunk_id] = (source_id, review_status)
+            section_statuses[chunk_id] = (source_id, review_status, extraction_quality)
             sections.append(
                 (
                     chunk_id,
@@ -444,7 +643,8 @@ def _load_sections(
                     review_status,
                 )
             )
-    return sections, section_statuses
+            qualities.append((chunk_id, extraction_quality, json.dumps(warnings, ensure_ascii=False)))
+    return sections, qualities, section_statuses
 
 
 def _source_index(rows: Iterable[dict[str, str]]) -> dict[tuple[str, str], dict[str, str]]:
@@ -463,11 +663,172 @@ def _source_index(rows: Iterable[dict[str, str]]) -> dict[tuple[str, str], dict[
     return exact
 
 
+def _canonical_value(value: object) -> object:
+    """Create a comparison-only representation independent of input order."""
+
+    if isinstance(value, dict):
+        return {
+            str(key): _canonical_value(item)
+            for key, item in sorted(value.items(), key=lambda item: str(item[0]))
+            if not str(key).startswith("__catalog_")
+        }
+    if isinstance(value, (list, tuple)):
+        normalized = [_canonical_value(item) for item in value]
+        # Catalog lists are semantic collections.  Sorting their canonical
+        # JSON prevents ordering alone from deciding whether two rows conflict.
+        return sorted(
+            normalized,
+            key=lambda item: json.dumps(item, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+        )
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return value
+
+
+def _canonical_payload(row: dict[str, object]) -> str:
+    return json.dumps(
+        _canonical_value(row), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+
+
+def _input_row_label(row: dict[str, object], ordinal: int) -> object:
+    return row.get("__catalog_input_row__", ordinal)
+
+
+def _field_differences(entries: list[tuple[int, dict[str, object]]]) -> dict[str, object]:
+    """Return precise, serializable field deltas for a conflict diagnostic."""
+
+    fields = sorted(
+        {
+            str(field)
+            for _ordinal, row in entries
+            for field in row
+            if not str(field).startswith("__catalog_")
+        }
+    )
+    differences: dict[str, object] = {}
+    for field in fields:
+        values: list[dict[str, object]] = []
+        signatures: set[str] = set()
+        for ordinal, row in entries:
+            value = row.get(field)
+            signature = json.dumps(
+                _canonical_value(value), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            )
+            signatures.add(signature)
+            values.append({"input_row": _input_row_label(row, ordinal), "value": value})
+        if len(signatures) > 1:
+            differences[field] = values
+    return differences
+
+
+def _reconcile_catalog_rows(
+    entity: str,
+    raw_rows: object,
+    *,
+    key_for: Any,
+) -> ReconciledRows:
+    """Deduplicate exact catalog inputs and fail before SQLite sees conflicts.
+
+    SQLite uniqueness violations used to be hidden by ``INSERT OR IGNORE``.
+    This reconciliation is intentionally run before any business-table write,
+    and selects canonical ordering by key/payload rather than input order.
+    """
+
+    if raw_rows is None:
+        values: list[object] = []
+    elif isinstance(raw_rows, list):
+        values = raw_rows
+    else:
+        raise DataIntegrityError(f"catalog {entity} must be a list")
+
+    indexed: list[tuple[int, dict[str, object]]] = []
+    for ordinal, value in enumerate(values, start=1):
+        if not isinstance(value, dict):
+            raise DataIntegrityError(f"catalog {entity} input row {ordinal} must be an object")
+        indexed.append((ordinal, {str(key): item for key, item in value.items()}))
+
+    groups: dict[tuple[object, ...], list[tuple[int, dict[str, object]]]] = {}
+    for ordinal, row in indexed:
+        try:
+            raw_key = key_for(row)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise DataIntegrityError(
+                f"catalog {entity} input row {_input_row_label(row, ordinal)!r} has no canonical key: {exc}"
+            ) from exc
+        key = tuple(raw_key) if isinstance(raw_key, tuple) else (raw_key,)
+        groups.setdefault(key, []).append((ordinal, row))
+
+    accepted: list[tuple[tuple[object, ...], str, dict[str, object]]] = []
+    exact_duplicates = 0
+    for key, entries in groups.items():
+        payloads: dict[str, list[tuple[int, dict[str, object]]]] = {}
+        for ordinal, row in entries:
+            payloads.setdefault(_canonical_payload(row), []).append((ordinal, row))
+        if len(payloads) != 1:
+            labels = [_input_row_label(row, ordinal) for ordinal, row in entries]
+            differences = _field_differences(entries)
+            raise DataIntegrityError(
+                f"catalog {entity} canonical-key conflict; key={key!r}; "
+                f"input_rows={labels!r}; field_differences="
+                f"{json.dumps(differences, ensure_ascii=False, sort_keys=True)}"
+            )
+        payload, equivalent = next(iter(payloads.items()))
+        exact_duplicates += len(equivalent) - 1
+        # Stable selection and stable output ordering make the result wholly
+        # independent of source-file row order.
+        selected = min(
+            equivalent,
+            key=lambda entry: str(_input_row_label(entry[1], entry[0])),
+        )[1]
+        accepted.append((key, payload, selected))
+
+    accepted.sort(key=lambda item: (repr(item[0]), item[1]))
+    rows = tuple(
+        {
+            key: value
+            for key, value in row.items()
+            if not key.startswith("__catalog_")
+        }
+        for _key, _payload, row in accepted
+    )
+    result = ReconciledRows(
+        rows=rows,
+        input_count=len(indexed),
+        accepted_count=len(rows),
+        exact_duplicate_count=exact_duplicates,
+    )
+    result.as_metadata()
+    return result
+
+
+def _registered_source_path(root: Path, row: dict[str, str]) -> Path:
+    """Resolve a source-registry path under an explicitly selected raw root."""
+
+    raw_name = str(row.get("file") or "").strip().replace("\\", "/")
+    if not raw_name:
+        raise DataIntegrityError("source registry contains an empty file")
+    candidate = root.joinpath(*[part for part in raw_name.split("/") if part])
+    try:
+        candidate.resolve().relative_to(root.resolve())
+    except ValueError as exc:
+        raise DataIntegrityError(f"source file escapes source_root: {raw_name!r}") from exc
+    return candidate
+
+
 def _materialize_sources(
-    connection: sqlite3.Connection, rows: list[dict[str, str]], root: Path
-) -> dict[tuple[str, str], str]:
+    connection: sqlite3.Connection,
+    rows: list[dict[str, str]],
+    source_root: Path,
+    reviews: tuple[SourceReview, ...],
+    *,
+    require_source_files: bool,
+) -> tuple[dict[tuple[str, str], str], dict[str, SourceTrust]]:
     ids: dict[tuple[str, str], str] = {}
     values: list[tuple[object, ...]] = []
+    taxonomy_values: list[tuple[object, ...]] = []
+    authenticity_values: list[tuple[object, ...]] = []
+    trusts: dict[str, SourceTrust] = {}
     for row in rows:
         title = str(row.get("doc_title") or "").strip()
         cohort = _source_scope(row.get("cohort"))
@@ -480,7 +841,43 @@ def _materialize_sources(
             )
         identifier = _source_id(title, cohort, url)
         ids[key] = identifier
-        local = root / "data" / row["file"]
+        local = _registered_source_path(source_root, row)
+        declared_sha256 = _declared_sha256(row.get("source_sha256"))
+        if require_source_files and not local.is_file():
+            raise DataIntegrityError(
+                "registered source does not exist under explicit source_root: "
+                f"title={title!r}, file={row.get('file')!r}, source_root={str(source_root)!r}"
+            )
+        if require_source_files and declared_sha256 is None:
+            raise DataIntegrityError(
+                "registered source under explicit source_root requires source_sha256: "
+                f"title={title!r}, file={row.get('file')!r}"
+            )
+        observed_sha256 = _sha(local)
+        if declared_sha256 and observed_sha256 and declared_sha256 != observed_sha256:
+            raise DataIntegrityError(
+                "registered source_sha256 does not match source bytes: "
+                f"title={title!r}, file={row.get('file')!r}"
+            )
+        configured_authenticity = _source_authenticity_status(
+            row.get("authenticity_status"), has_digest=declared_sha256 is not None
+        )
+        source_review = _review_for_source(row, reviews)
+        if configured_authenticity == "verified" and source_review is not None:
+            authenticity_status = "verified"
+        elif configured_authenticity == "unverified" or not (declared_sha256 or observed_sha256):
+            authenticity_status = "unverified"
+        else:
+            authenticity_status = "review_required"
+        source_sha256 = observed_sha256 or declared_sha256
+        doc_type = _controlled_doc_type(row.get("doc_type"))
+        topics = _controlled_topics(row.get("topics"))
+        trusts[identifier] = SourceTrust(
+            source_sha256=source_sha256,
+            authenticity_status=authenticity_status,
+            doc_type=doc_type,
+            topics=topics,
+        )
         year = row.get("year") or row.get("cohort") or ""
         fallback_authority = 2 if row.get("level") == "校级" else 1
         try:
@@ -506,14 +903,28 @@ def _materialize_sources(
                 row.get("status", "历史"),
                 row.get("page_url"),
                 url,
-                _sha(local),
+                source_sha256,
                 row.get("collected_at"),
+            )
+        )
+        taxonomy_values.append((identifier, doc_type, json.dumps(topics, ensure_ascii=False)))
+        authenticity_values.append(
+            (
+                identifier,
+                declared_sha256,
+                observed_sha256,
+                authenticity_status,
+                source_review.decision if source_review is not None else None,
             )
         )
     connection.executemany(
         "INSERT INTO sources VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", values
     )
-    return ids
+    connection.executemany("INSERT INTO source_taxonomy VALUES (?, ?, ?)", taxonomy_values)
+    connection.executemany(
+        "INSERT INTO source_authenticity VALUES (?, ?, ?, ?, ?)", authenticity_values
+    )
+    return ids, trusts
 
 
 def _source_for(
@@ -540,6 +951,212 @@ def _source_for(
     )
 
 
+def _lineage_integer(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return None
+
+
+def _field_metadata(row: dict[str, object], field: str) -> tuple[object, str]:
+    """Read a field-owned verification entry without accepting a bare claim.
+
+    ``field_verification`` is the current contract.  ``field_lineage`` is
+    accepted as a migration aid, but it still has to carry an explicit review
+    status before it can promote a field.
+    """
+
+    verification = row.get("field_verification")
+    lineage = row.get("field_lineage")
+    entry: object = None
+    if isinstance(verification, dict):
+        entry = verification.get(field)
+    if entry is None and isinstance(lineage, dict):
+        entry = lineage.get(field)
+    if not isinstance(entry, dict):
+        return {}, "review_required"
+    nested_lineage = entry.get("lineage")
+    value = nested_lineage if isinstance(nested_lineage, dict) else entry
+    status = str(entry.get("verification_status") or entry.get("status") or "").strip().lower()
+    if status not in REVIEW_STATUSES:
+        status = "review_required"
+    return value, status
+
+
+def _decimal(value: object) -> Decimal | None:
+    """Return a finite decimal without accepting booleans or malformed values."""
+
+    if isinstance(value, bool):
+        return None
+    try:
+        parsed = Decimal(str(value).strip())
+    except (InvalidOperation, ValueError):
+        return None
+    return parsed if parsed.is_finite() else None
+
+
+def _numeric_tokens(value: str) -> tuple[Decimal, ...]:
+    """Read standalone Arabic numerals, never a prefix of a larger number."""
+
+    values: list[Decimal] = []
+    for token in re.findall(r"(?<![0-9.])[0-9]+(?:\.[0-9]+)?(?![0-9.])", value):
+        parsed = _decimal(token)
+        if parsed is not None:
+            values.append(parsed)
+    return tuple(values)
+
+
+def _span_covers_field_value(field: str, exact_value: object, text_span: str | None) -> bool:
+    """Validate a field-owned evidence span without cross-field numeric matches.
+
+    A source/table review says that a physical extraction is usable; it does
+    not make a number in any nearby text evidence for every structured field.
+    Numeric fields therefore require an exact numeric token plus their own
+    semantic unit (or a bare table cell), while textual fields require an exact
+    normalized cell value.  This deliberately fails closed for prose-like
+    spans that cannot be attributed to one field.
+    """
+
+    if exact_value is None or text_span is None:
+        return exact_value is None
+    span = text_span.strip()
+    if not span:
+        return False
+
+    if field in {"credits", "required_credits"}:
+        expected = _decimal(exact_value)
+        if expected is None or re.search(r"(?:第\s*)?[0-9]+\s*(?:学期|semester\b)", span, re.I):
+            return False
+        labelled = re.findall(
+            r"(?<![0-9.])([0-9]+(?:\.[0-9]+)?)\s*(?:学分|credits?\b)",
+            span,
+            re.I,
+        )
+        values = tuple(value for token in labelled if (value := _decimal(token)) is not None)
+        if values:
+            return expected in values
+        # A table cell can legitimately contain only the number.  Treat any
+        # prose or a number with a different unit as insufficient evidence.
+        bare_values = _numeric_tokens(span)
+        return (
+            len(bare_values) == 1
+            and bare_values[0] == expected
+            and re.fullmatch(r"\s*[0-9]+(?:\.[0-9]+)?\s*", span) is not None
+        )
+
+    if field == "semester":
+        expected = _decimal(exact_value)
+        if expected is None or re.search(r"[0-9]+(?:\.[0-9]+)?\s*(?:学分|credits?\b)", span, re.I):
+            return False
+        semantic = re.findall(r"(?:第\s*)?([0-9]+)\s*(?:学期|semester\b)", span, re.I)
+        values = tuple(value for token in semantic if (value := _decimal(token)) is not None)
+        if values:
+            return expected in values
+        # As above, accept a bare cell only on exact equality; do not allow
+        # "1" to be proved by a substring of "10".
+        bare_values = _numeric_tokens(span)
+        return (
+            len(bare_values) == 1
+            and bare_values[0] == expected
+            and re.fullmatch(r"\s*[0-9]+\s*", span) is not None
+        )
+
+    return _normalized(exact_value) == _normalized(span)
+
+
+def _field_verification_rows(
+    *,
+    entity_type: str,
+    record_id: str,
+    source_id: str,
+    source_trust: SourceTrust,
+    evidence: object,
+    section_statuses: dict[str, tuple[str, str, str]],
+    strict_fields: tuple[str, ...],
+    catalog_row: dict[str, object],
+    field_values: dict[str, object],
+    expected_page: object = None,
+) -> tuple[str, list[tuple[object, ...]]]:
+    """Materialize reviewed field lineage and derive the row trust status.
+
+    A structured record is ``verified`` only when each strict field carries a
+    source hash, page, row/cell/span locator, explicit field review decision,
+    and points at the same reviewed evidence chunk used by the record.  This
+    prevents a whole-source review from silently promoting OCR-derived numbers.
+    """
+
+    evidence_chunk_id = _evidence_chunk_id(evidence)
+    base_status = _structured_review_status(evidence, source_id, section_statuses)
+    expected_page_number = _lineage_integer(expected_page)
+    rows: list[tuple[object, ...]] = []
+    statuses: list[str] = []
+    for field in strict_fields:
+        lineage, requested_status = _field_metadata(catalog_row, field)
+        lineage_dict = lineage if isinstance(lineage, dict) else {}
+        try:
+            lineage_sha = _declared_sha256(lineage_dict.get("source_sha256"))
+        except DataIntegrityError:
+            lineage_sha = None
+        chunk_id = str(lineage_dict.get("chunk_id") or "").strip() or None
+        page = _lineage_integer(lineage_dict.get("page"))
+        table_row = _lineage_integer(lineage_dict.get("row"))
+        cell_ref = str(lineage_dict.get("cell") or "").strip() or None
+        text_span = str(lineage_dict.get("span") or "").strip() or None
+        locator_present = table_row is not None or cell_ref is not None or text_span is not None
+        exact_value = field_values.get(field)
+        span_covers_value = _span_covers_field_value(field, exact_value, text_span)
+        matching_page = expected_page_number is None or page == expected_page_number
+        valid_lineage = (
+            source_trust.source_sha256 is not None
+            and lineage_sha == source_trust.source_sha256
+            and evidence_chunk_id is not None
+            and chunk_id == evidence_chunk_id
+            and page is not None
+            and page > 0
+            and locator_present
+            and text_span is not None
+            and matching_page
+            and span_covers_value
+        )
+        if (
+            requested_status == "verified"
+            and valid_lineage
+            and base_status == "verified"
+            and source_trust.authenticity_status == "verified"
+        ):
+            status = "verified"
+        elif base_status == "unverified":
+            status = "unverified"
+        else:
+            status = "review_required"
+        statuses.append(status)
+        rows.append(
+            (
+                entity_type,
+                record_id,
+                field,
+                source_id,
+                lineage_sha,
+                chunk_id,
+                page,
+                table_row,
+                cell_ref,
+                text_span,
+                status,
+                json.dumps(_canonical_value(lineage_dict), ensure_ascii=False, sort_keys=True),
+            )
+        )
+
+    if base_status == "unverified":
+        return "unverified", rows
+    if base_status == "verified" and statuses and all(status == "verified" for status in statuses):
+        return "verified", rows
+    return "review_required", rows
+
+
 def build_database(
     output: str | Path = DEFAULT_DATABASE,
     *,
@@ -549,19 +1166,51 @@ def build_database(
     aliases_path: str | Path = DEFAULT_ALIAS_CONFIG,
     source_review_path: str | Path | None = DEFAULT_SOURCE_REVIEW,
     evidence_review_path: str | Path | None = DEFAULT_EVIDENCE_REVIEW,
+    source_root: str | Path | None = None,
 ) -> dict[str, object]:
-    """Build a new immutable SQLite projection; generated output is not Git data."""
+    """Build a new immutable SQLite projection; generated output is not Git data.
+
+    Catalog identity reconciliation happens before SQLite is opened for business
+    rows.  Thus a uniqueness conflict can never be hidden by insertion order
+    or by SQLite's conflict handling.
+    """
     target, catalog_file, source_file, chunk_file = map(
         Path, (output, catalog_path, sources_path, chunks_path)
     )
     source_review_file = Path(source_review_path) if source_review_path is not None else None
     evidence_review_file = Path(evidence_review_path) if evidence_review_path is not None else None
-    catalog = json.loads(catalog_file.read_text(encoding="utf-8"))
+    raw_catalog = json.loads(catalog_file.read_text(encoding="utf-8"))
+    if not isinstance(raw_catalog, dict):
+        raise DataIntegrityError("catalog root must be a JSON object")
+    catalog = {str(key): value for key, value in raw_catalog.items()}
     source_rows = _source_rows(source_file)
     _source_index(source_rows)
     aliases = _read_aliases(Path(aliases_path))
     source_reviews = _load_source_reviews(source_review_file)
     evidence_reviews = _load_evidence_reviews(evidence_review_file)
+    plans = _reconcile_catalog_rows(
+        "plans",
+        catalog.get("plans", []),
+        key_for=lambda row: (
+            str(row["major"]),
+            str(row["college"]),
+            int(str(row["cohort"])),
+        ),
+    )
+    course_offerings = _reconcile_catalog_rows(
+        "course_offerings",
+        catalog.get("courses", []),
+        key_for=lambda row: (
+            str(row["major"]),
+            str(row["college"]),
+            int(str(row["cohort"])),
+            str(row["module"]),
+            str(row.get("code") or "").upper(),
+            str(row["name"]),
+            _semester(row.get("semester")),
+        ),
+    )
+    raw_source_root = Path(source_root) if source_root is not None else ROOT / "data" / "raw"
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.with_suffix(target.suffix + ".tmp")
     if temporary.exists():
@@ -569,118 +1218,254 @@ def build_database(
     connection = sqlite3.connect(temporary)
     try:
         connection.executescript(SCHEMA)
-        source_ids = _materialize_sources(connection, source_rows, ROOT)
-        sections, section_statuses = _load_sections(
-            chunk_file, source_ids, source_rows, source_reviews, evidence_reviews
+        source_ids, source_trusts = _materialize_sources(
+            connection,
+            source_rows,
+            raw_source_root,
+            source_reviews,
+            require_source_files=source_root is not None,
+        )
+        sections, section_qualities, section_statuses = _load_sections(
+            chunk_file, source_ids, source_trusts, evidence_reviews
         )
         connection.executemany(
             "INSERT INTO source_sections VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", sections
         )
+        connection.executemany(
+            "INSERT INTO section_extraction_quality VALUES (?, ?, ?)", section_qualities
+        )
+
+        program_inputs: list[dict[str, object]] = []
+        requirement_inputs: list[dict[str, object]] = []
+        module_entity_inputs: list[dict[str, object]] = []
+        for plan_index, plan in enumerate(plans.rows, start=1):
+            cohort = int(str(plan["cohort"]))
+            program_id = _program_id(str(plan["major"]), str(plan["college"]), cohort)
+            program_inputs.append(
+                {
+                    "program_id": program_id,
+                    "major": plan["major"],
+                    "college": plan["college"],
+                    "cohort": cohort,
+                    "source_title": plan["source_title"],
+                    "__catalog_input_row__": f"plans[{plan_index}]",
+                }
+            )
+            raw_modules = plan.get("modules", [])
+            if not isinstance(raw_modules, list):
+                raise DataIntegrityError(f"catalog plans[{plan_index}].modules must be a list")
+            for module_index, raw_module in enumerate(raw_modules, start=1):
+                if not isinstance(raw_module, dict):
+                    raise DataIntegrityError(
+                        f"catalog plans[{plan_index}].modules[{module_index}] must be an object"
+                    )
+                module = {str(key): value for key, value in raw_module.items()}
+                module_name = str(module.get("name") or "").strip()
+                if not module_name:
+                    raise DataIntegrityError(
+                        f"catalog plans[{plan_index}].modules[{module_index}] has an empty name"
+                    )
+                module_entity_inputs.append(
+                    {
+                        "program_id": program_id,
+                        "module": module_name,
+                        "__catalog_input_row__": f"plans[{plan_index}].modules[{module_index}]",
+                    }
+                )
+                requirement_inputs.append(
+                    {
+                        **module,
+                        "program_id": program_id,
+                        "module": module_name,
+                        "source_title": plan["source_title"],
+                        "cohort": cohort,
+                        "__catalog_input_row__": f"plans[{plan_index}].modules[{module_index}]",
+                    }
+                )
+
+        for course_index, course in enumerate(course_offerings.rows, start=1):
+            cohort = int(str(course["cohort"]))
+            program_id = _program_id(str(course["major"]), str(course["college"]), cohort)
+            module_name = str(course.get("module") or "").strip()
+            if not module_name:
+                raise DataIntegrityError(f"catalog courses[{course_index}] has an empty module")
+            module_entity_inputs.append(
+                {
+                    "program_id": program_id,
+                    "module": module_name,
+                    "__catalog_input_row__": f"courses[{course_index}]",
+                }
+            )
+
+        programs = _reconcile_catalog_rows(
+            "programs",
+            program_inputs,
+            key_for=lambda row: (str(row["program_id"]),),
+        )
+        modules = _reconcile_catalog_rows(
+            "modules",
+            module_entity_inputs,
+            key_for=lambda row: (str(row["program_id"]), str(row["module"])),
+        )
+        requirements = _reconcile_catalog_rows(
+            "requirements",
+            requirement_inputs,
+            key_for=lambda row: (str(row["program_id"]), str(row["module"])),
+        )
+
         program_rows: list[tuple[object, ...]] = []
         alias_rows: set[tuple[str, str, str]] = set()
+        program_alias_input_count = 0
         module_rows: list[tuple[str, str, str]] = []
         module_map: dict[tuple[str, str], str] = {}
-        requirement_rows: list[tuple[object, ...]] = []
-        quarantined_requirement_count = 0
-        for plan in catalog.get("plans", []):
-            cohort = int(plan["cohort"])
-            source_id = _source_for(plan["source_title"], cohort, source_ids)
-            program_id = _program_id(plan["major"], plan["college"], cohort)
-            program_rows.append((program_id, plan["major"], plan["college"], cohort, source_id))
-            values = {str(plan["major"]), str(plan["major"]).removesuffix("专业")}
+        program_ids: set[str] = set()
+        for program in programs.rows:
+            program_id = str(program["program_id"])
+            source_id = _source_for(program["source_title"], int(program["cohort"]), source_ids)
+            program_ids.add(program_id)
+            program_rows.append(
+                (
+                    program_id,
+                    program["major"],
+                    program["college"],
+                    program["cohort"],
+                    source_id,
+                )
+            )
+            values = {str(program["major"]), str(program["major"]).removesuffix("专业")}
             values.update(
                 alias
                 for alias, target_name in aliases["program_aliases"].items()
-                if target_name == plan["major"]
+                if target_name == program["major"]
             )
+            program_alias_input_count += len(values)
             alias_rows.update(
                 (alias, _normalized(alias), program_id) for alias in values if _normalized(alias)
             )
-            for module in plan.get("modules", []):
-                module_name = str(module["name"])
-                module_id = _module_id(program_id, module_name)
-                module_map[(program_id, module_name)] = module_id
-                module_rows.append((module_id, program_id, module_name))
-                evidence = module.get("evidence")
-                page = _page(evidence.get("article") if isinstance(evidence, dict) else None)
-                chunk_id = _evidence_chunk_id(evidence)
-                review_status = _structured_review_status(
-                    evidence, source_id, section_statuses
+        for module in modules.rows:
+            program_id = str(module["program_id"])
+            module_name = str(module["module"])
+            module_id = _module_id(program_id, module_name)
+            module_map[(program_id, module_name)] = module_id
+            module_rows.append((module_id, program_id, module_name))
+
+        requirement_rows: list[tuple[object, ...]] = []
+        field_verification_rows: list[tuple[object, ...]] = []
+        quarantined_requirement_count = 0
+        for module in requirements.rows:
+            program_id = str(module["program_id"])
+            module_name = str(module["module"])
+            source_id = _source_for(module["source_title"], int(module["cohort"]), source_ids)
+            evidence = module.get("evidence")
+            page = _page(evidence.get("article") if isinstance(evidence, dict) else None)
+            chunk_id = _evidence_chunk_id(evidence)
+            record_id = stable_id("req", program_id, module_name)
+            review_status, field_rows = _field_verification_rows(
+                entity_type="requirement",
+                record_id=record_id,
+                source_id=source_id,
+                source_trust=source_trusts[source_id],
+                evidence=evidence,
+                section_statuses=section_statuses,
+                strict_fields=STRICT_REQUIREMENT_FIELDS,
+                catalog_row=module,
+                field_values={
+                    "module": module_name,
+                    "required_credits": module.get("required_credits"),
+                },
+                expected_page=page,
+            )
+            field_verification_rows.extend(field_rows)
+            # Untraceable or source-mismatched requirements remain in the
+            # explicit quarantine accounting rather than entering production.
+            if chunk_id is None or review_status == "unverified":
+                quarantined_requirement_count += 1
+                continue
+            requirement_rows.append(
+                (
+                    record_id,
+                    program_id,
+                    module_map[(program_id, module_name)],
+                    module.get("required_credits"),
+                    module.get("listed_credits"),
+                    module.get("rule_text") or "",
+                    source_id,
+                    page,
+                    chunk_id,
+                    PARSER_VERSION,
+                    0.9 if evidence else 0.6,
+                    review_status,
                 )
-                # Untraceable requirements remain in the source catalog's
-                # review queue, not in the production projection.  Keeping
-                # thousands of rows with no evidence made the release verifier
-                # fail while also inviting downstream tools to treat them as
-                # partially usable requirements.
-                if chunk_id is None or review_status == "unverified":
-                    quarantined_requirement_count += 1
-                    continue
-                requirement_rows.append(
-                    (
-                        stable_id("req", program_id, module_name),
-                        program_id,
-                        module_id,
-                        module.get("required_credits"),
-                        module.get("listed_credits"),
-                        module.get("rule_text") or "",
-                        source_id,
-                        page,
-                        chunk_id,
-                        PARSER_VERSION,
-                        0.9 if evidence else 0.6,
-                        review_status,
-                    )
-                )
+            )
+
+        connection.executemany("INSERT INTO programs VALUES (?, ?, ?, ?, ?)", program_rows)
+        connection.executemany("INSERT INTO program_aliases VALUES (?, ?, ?)", sorted(alias_rows))
+        connection.executemany("INSERT INTO modules VALUES (?, ?, ?)", module_rows)
         connection.executemany(
-            "INSERT OR IGNORE INTO programs VALUES (?, ?, ?, ?, ?)", program_rows
+            "INSERT INTO requirements VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", requirement_rows
         )
-        connection.executemany(
-            "INSERT OR IGNORE INTO program_aliases VALUES (?, ?, ?)", sorted(alias_rows)
-        )
-        connection.executemany("INSERT OR IGNORE INTO modules VALUES (?, ?, ?)", module_rows)
+
         module_alias_rows: set[tuple[str, str, str]] = set()
+        module_alias_input_count = 0
         for (_program_key, module_name), module_id in module_map.items():
             module_alias_rows.add((module_name, _normalized(module_name), module_id))
+            module_alias_input_count += 1
             for alias, target_name in aliases["module_aliases"].items():
                 if _normalized(target_name) in _normalized(module_name) or _normalized(
                     module_name
                 ) in _normalized(target_name):
                     module_alias_rows.add((alias, _normalized(alias), module_id))
-        connection.executemany(
-            "INSERT OR IGNORE INTO module_aliases VALUES (?, ?, ?)", sorted(module_alias_rows)
+                    module_alias_input_count += 1
+        connection.executemany("INSERT INTO module_aliases VALUES (?, ?, ?)", sorted(module_alias_rows))
+
+        course_entity_inputs = [
+            {
+                "code": str(course.get("code") or "").upper() or None,
+                "name": str(course["name"]),
+                "__catalog_input_row__": f"courses[{course_index}]",
+            }
+            for course_index, course in enumerate(course_offerings.rows, start=1)
+        ]
+        courses = _reconcile_catalog_rows(
+            "course_entities",
+            course_entity_inputs,
+            key_for=lambda row: (str(row.get("code") or ""), str(row["name"])),
         )
-        connection.executemany(
-            "INSERT OR IGNORE INTO requirements VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            requirement_rows,
-        )
-        course_rows: list[tuple[str, str | None, str]] = []
+        course_rows: list[tuple[str, str | None, str]] = [
+            (
+                _course_id(
+                    str(course.get("code") or "").upper() or None,
+                    str(course["name"]),
+                ),
+                str(course.get("code") or "").upper() or None,
+                str(course["name"]),
+            )
+            for course in courses.rows
+        ]
         course_alias_rows: set[tuple[str, str, str]] = set()
+        course_alias_input_count = 0
         offering_rows: list[tuple[object, ...]] = []
-        for course in catalog.get("courses", []):
-            cohort = int(course["cohort"])
-            program_id = _program_id(course["major"], course["college"], cohort)
-            course_module_id = module_map.get((program_id, course["module"]))
-            if course_module_id is None:
-                course_module_id = _module_id(program_id, course["module"])
-                module_map[(program_id, course["module"])] = course_module_id
-                connection.execute(
-                    "INSERT OR IGNORE INTO modules VALUES (?, ?, ?)",
-                    (course_module_id, program_id, course["module"]),
+        for course in course_offerings.rows:
+            cohort = int(str(course["cohort"]))
+            program_id = _program_id(str(course["major"]), str(course["college"]), cohort)
+            if program_id not in program_ids:
+                raise DataIntegrityError(
+                    "catalog course references a program without a reconciled plan: "
+                    f"major={course['major']!r}, college={course['college']!r}, cohort={cohort!r}"
                 )
-                connection.execute(
-                    "INSERT OR IGNORE INTO module_aliases VALUES (?, ?, ?)",
-                    (course["module"], _normalized(course["module"]), course_module_id),
-                )
+            course_module_id = module_map[(program_id, str(course["module"]))]
             code = str(course.get("code") or "").upper() or None
             name = str(course["name"])
             course_id = _course_id(code, name)
-            course_rows.append((course_id, code, name))
             course_alias_rows.add((name, _normalized(name), course_id))
+            course_alias_input_count += 1
             if code:
                 course_alias_rows.add((code, _normalized(code), course_id))
+                course_alias_input_count += 1
             for alias, target_name in aliases["course_aliases"].items():
                 if target_name == name:
                     course_alias_rows.add((alias, _normalized(alias), course_id))
+                    course_alias_input_count += 1
             evidence = course.get("evidence")
             source_id = _source_for(course["source_title"], cohort, source_ids)
             record_id = stable_id(
@@ -692,6 +1477,24 @@ def build_database(
                 course.get("page"),
                 course.get("source_row"),
             )
+            review_status, field_rows = _field_verification_rows(
+                entity_type="program_course",
+                record_id=record_id,
+                source_id=source_id,
+                source_trust=source_trusts[source_id],
+                evidence=evidence,
+                section_statuses=section_statuses,
+                strict_fields=STRICT_COURSE_FIELDS,
+                catalog_row=course,
+                field_values={
+                    "module": course.get("module"),
+                    "credits": course.get("credits"),
+                    "semester": _semester(course.get("semester")),
+                    "nature": course.get("nature"),
+                },
+                expected_page=course.get("page"),
+            )
+            field_verification_rows.extend(field_rows)
             offering_rows.append(
                 (
                     record_id,
@@ -712,22 +1515,78 @@ def build_database(
                     _evidence_chunk_id(evidence),
                     PARSER_VERSION,
                     0.95 if evidence else 0.7,
-                    _structured_review_status(evidence, source_id, section_statuses),
+                    review_status,
                 )
             )
-        connection.executemany("INSERT OR IGNORE INTO courses VALUES (?, ?, ?)", course_rows)
+        connection.executemany("INSERT INTO courses VALUES (?, ?, ?)", course_rows)
+        connection.executemany("INSERT INTO course_aliases VALUES (?, ?, ?)", sorted(course_alias_rows))
         connection.executemany(
-            "INSERT OR IGNORE INTO course_aliases VALUES (?, ?, ?)", sorted(course_alias_rows)
+            "INSERT INTO program_courses VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            offering_rows,
         )
         connection.executemany(
-            "INSERT OR IGNORE INTO program_courses VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            offering_rows,
+            "INSERT INTO field_verifications VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            field_verification_rows,
         )
         chunks_sha256 = _sha(chunk_file) or ""
         source_review_sha256 = (_sha(source_review_file) or "") if source_review_file else ""
         evidence_review_sha256 = (
             (_sha(evidence_review_file) or "") if evidence_review_file else ""
         )
+        def counts(*, input_count: int, accepted: int, duplicates: int, quarantined: int = 0) -> dict[str, int]:
+            result = {
+                "input": input_count,
+                "accepted": accepted,
+                "exact_duplicates": duplicates,
+                "quarantined": quarantined,
+            }
+            if result["input"] != result["accepted"] + result["exact_duplicates"] + result["quarantined"]:
+                raise DataIntegrityError(f"reconciliation count conservation violated: {result!r}")
+            return result
+
+        reconciliation_counts = {
+            "plans": plans.as_metadata(),
+            "programs": programs.as_metadata(),
+            "modules": modules.as_metadata(),
+            "requirements": counts(
+                input_count=requirements.input_count,
+                accepted=len(requirement_rows),
+                duplicates=requirements.exact_duplicate_count,
+                quarantined=quarantined_requirement_count,
+            ),
+            "course_offerings": course_offerings.as_metadata(),
+            "course_entities": courses.as_metadata(),
+            "program_aliases": counts(
+                input_count=program_alias_input_count,
+                accepted=len(alias_rows),
+                duplicates=max(
+                    0,
+                    program_alias_input_count - len(alias_rows),
+                ),
+            ),
+            "module_aliases": counts(
+                input_count=module_alias_input_count,
+                accepted=len(module_alias_rows),
+                duplicates=max(0, module_alias_input_count - len(module_alias_rows)),
+            ),
+            "course_aliases": counts(
+                input_count=course_alias_input_count,
+                accepted=len(course_alias_rows),
+                duplicates=max(0, course_alias_input_count - len(course_alias_rows)),
+            ),
+        }
+        field_status_counts = {
+            status: sum(row[10] == status for row in field_verification_rows)
+            for status in REVIEW_STATUSES
+        }
+        source_authenticity_counts = {
+            status: sum(trust.authenticity_status == status for trust in source_trusts.values())
+            for status in REVIEW_STATUSES
+        }
+        extraction_quality_counts = {
+            status: sum(row[1] == status for row in section_qualities)
+            for status in EXTRACTION_QUALITY_STATUSES
+        }
         metadata = {
             "schema_version": SCHEMA_VERSION,
             "parser_version": PARSER_VERSION,
@@ -739,6 +1598,19 @@ def build_database(
             "evidence_review_sha256": evidence_review_sha256,
             "evidence_state_sha256": _combined_sha(
                 chunks_sha256, source_review_sha256, evidence_review_sha256
+            ),
+            "reconciliation_contract": "input=accepted+exact_duplicates+quarantined",
+            "reconciliation_counts": json.dumps(
+                reconciliation_counts, ensure_ascii=False, sort_keys=True
+            ),
+            "source_authenticity_counts": json.dumps(
+                source_authenticity_counts, ensure_ascii=False, sort_keys=True
+            ),
+            "extraction_quality_counts": json.dumps(
+                extraction_quality_counts, ensure_ascii=False, sort_keys=True
+            ),
+            "field_verification_counts": json.dumps(
+                field_status_counts, ensure_ascii=False, sort_keys=True
             ),
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -759,6 +1631,8 @@ def build_database(
             ).fetchone()[0],
             **metadata,
             "quarantined_requirement_count": quarantined_requirement_count,
+            "reconciliation_counts": reconciliation_counts,
+            "field_verification_counts": field_status_counts,
         }
     finally:
         connection.close()
@@ -822,13 +1696,29 @@ class AcademicRepository:
     def metadata(self) -> dict[str, str]:
         return {row["key"]: row["value"] for row in self._all("SELECT key, value FROM metadata")}
 
+    def _has_table(self, name: str) -> bool:
+        return self._one(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
+        ) is not None
+
+    def _legacy_untyped_taxonomy_compatibility(self) -> bool:
+        """Allow only unversioned hand-built test databases to remain readable.
+
+        A released legacy database has a schema-version metadata row and is
+        intentionally fail-closed when it lacks the taxonomy migration.  The
+        narrow compatibility branch exists for direct-SQL unit-test fixtures,
+        which historically create ``SCHEMA`` but omit all metadata.
+        """
+
+        return self._one("SELECT 1 FROM metadata WHERE key='schema_version'") is None
+
     def evidence_readiness(self) -> tuple[bool, tuple[str, ...]]:
         """Check that verified evidence supports the agent's core curriculum work.
 
         A database can be syntactically complete while every chunk is still
         pending review.  Health readiness therefore requires one current
-        program with both a verified course offering and a verified structured
-        requirement, each tied to a verified source section from the same
+        active program whose full course and requirement projections are
+        field-verified and tied to verified source sections from the same
         source, plus a verified current policy chunk that is not merely the
         provenance of one structured course or requirement.  This is
         deliberately stronger than checking file existence.
@@ -839,7 +1729,15 @@ class AcademicRepository:
             return int(row[0]) if row is not None else 0
 
         verified_sections = count(
-            "SELECT count(*) FROM source_sections WHERE review_status='verified'"
+            """
+            SELECT count(*)
+            FROM source_sections ss
+            JOIN source_authenticity sa ON sa.source_id=ss.source_id
+            JOIN section_extraction_quality sq ON sq.chunk_id=ss.chunk_id
+            WHERE ss.review_status='verified'
+              AND sa.authenticity_status='verified'
+              AND sq.extraction_quality='verified'
+            """
         )
         verified_courses = count(
             """
@@ -847,7 +1745,18 @@ class AcademicRepository:
             FROM program_courses pc
             JOIN source_sections ss
               ON ss.chunk_id=pc.chunk_id AND ss.source_id=pc.source_id
+            JOIN source_authenticity sa ON sa.source_id=pc.source_id
+            JOIN section_extraction_quality sq ON sq.chunk_id=pc.chunk_id
             WHERE pc.review_status='verified' AND ss.review_status='verified'
+              AND sa.authenticity_status='verified'
+              AND sq.extraction_quality='verified'
+              AND (
+                SELECT count(DISTINCT fv.field_name)
+                FROM field_verifications fv
+                WHERE fv.entity_type='program_course' AND fv.record_id=pc.record_id
+                  AND fv.field_name IN ('module', 'credits', 'semester', 'nature')
+                  AND fv.verification_status='verified'
+              ) = 4
             """
         )
         verified_requirements = count(
@@ -856,9 +1765,20 @@ class AcademicRepository:
             FROM requirements r
             JOIN source_sections ss
               ON ss.chunk_id=r.chunk_id AND ss.source_id=r.source_id
+            JOIN source_authenticity sa ON sa.source_id=r.source_id
+            JOIN section_extraction_quality sq ON sq.chunk_id=r.chunk_id
             WHERE r.required_credits IS NOT NULL
               AND r.review_status='verified'
               AND ss.review_status='verified'
+              AND sa.authenticity_status='verified'
+              AND sq.extraction_quality='verified'
+              AND (
+                SELECT count(DISTINCT fv.field_name)
+                FROM field_verifications fv
+                WHERE fv.entity_type='requirement' AND fv.record_id=r.record_id
+                  AND fv.field_name IN ('module', 'required_credits')
+                  AND fv.verification_status='verified'
+              ) = 2
             """
         )
         verified_policy_evidence = count(
@@ -866,8 +1786,14 @@ class AcademicRepository:
             SELECT count(*)
             FROM source_sections ss
             JOIN sources s ON s.source_id=ss.source_id
+            JOIN source_taxonomy st ON st.source_id=s.source_id
+            JOIN source_authenticity sa ON sa.source_id=s.source_id
+            JOIN section_extraction_quality sq ON sq.chunk_id=ss.chunk_id
             WHERE ss.review_status='verified'
               AND s.status='现行'
+              AND st.doc_type IN ('policy', 'notice', 'guide')
+              AND sa.authenticity_status='verified'
+              AND sq.extraction_quality='verified'
               AND NOT EXISTS (
                 SELECT 1 FROM program_courses pc WHERE pc.chunk_id=ss.chunk_id
               )
@@ -876,32 +1802,100 @@ class AcademicRepository:
               )
             """
         )
-        answerable_programs = count(
+        active_program_rows = self._all(
             """
-            SELECT count(*)
+            SELECT p.program_id
+            FROM programs p
+            JOIN sources ps ON ps.source_id=p.source_id
+            WHERE ps.status='现行'
+            ORDER BY p.program_id
+            """
+        )
+        answerable_program_rows = self._all(
+            """
+            SELECT p.program_id
             FROM programs p
             JOIN sources ps ON ps.source_id=p.source_id
             WHERE ps.status='现行'
               AND EXISTS (
-                SELECT 1
-                FROM program_courses pc
-                JOIN source_sections ss
-                  ON ss.chunk_id=pc.chunk_id AND ss.source_id=pc.source_id
-                WHERE pc.program_id=p.program_id
-                  AND pc.review_status='verified'
-                  AND ss.review_status='verified'
+                SELECT 1 FROM source_authenticity psa
+                WHERE psa.source_id=p.source_id
+                  AND psa.authenticity_status='verified'
               )
               AND EXISTS (
+                SELECT 1 FROM program_courses pc
+                WHERE pc.program_id=p.program_id
+              )
+              AND NOT EXISTS (
+                SELECT 1
+                FROM program_courses pc
+                WHERE pc.program_id=p.program_id
+                  AND NOT (
+                    pc.review_status='verified'
+                    AND EXISTS (
+                      SELECT 1
+                      FROM source_sections ss
+                      JOIN source_authenticity sa ON sa.source_id=ss.source_id
+                      JOIN section_extraction_quality sq ON sq.chunk_id=ss.chunk_id
+                      WHERE ss.chunk_id=pc.chunk_id
+                        AND ss.source_id=pc.source_id
+                        AND ss.review_status='verified'
+                        AND sa.authenticity_status='verified'
+                        AND sq.extraction_quality='verified'
+                    )
+                    AND (
+                      SELECT count(DISTINCT fv.field_name)
+                      FROM field_verifications fv
+                      WHERE fv.entity_type='program_course'
+                        AND fv.record_id=pc.record_id
+                        AND fv.field_name IN ('module', 'credits', 'semester', 'nature')
+                        AND fv.verification_status='verified'
+                    ) = 4
+                  )
+              )
+              AND EXISTS (
+                SELECT 1 FROM requirements r
+                WHERE r.program_id=p.program_id
+              )
+              AND NOT EXISTS (
                 SELECT 1
                 FROM requirements r
-                JOIN source_sections ss
-                  ON ss.chunk_id=r.chunk_id AND ss.source_id=r.source_id
                 WHERE r.program_id=p.program_id
-                  AND r.required_credits IS NOT NULL
-                  AND r.review_status='verified'
-                  AND ss.review_status='verified'
+                  AND NOT (
+                    r.required_credits IS NOT NULL
+                    AND r.review_status='verified'
+                    AND EXISTS (
+                      SELECT 1
+                      FROM source_sections ss
+                      JOIN source_authenticity sa ON sa.source_id=ss.source_id
+                      JOIN section_extraction_quality sq ON sq.chunk_id=ss.chunk_id
+                      WHERE ss.chunk_id=r.chunk_id
+                        AND ss.source_id=r.source_id
+                        AND ss.review_status='verified'
+                        AND sa.authenticity_status='verified'
+                        AND sq.extraction_quality='verified'
+                    )
+                    AND (
+                      SELECT count(DISTINCT fv.field_name)
+                      FROM field_verifications fv
+                      WHERE fv.entity_type='requirement'
+                        AND fv.record_id=r.record_id
+                        AND fv.field_name IN ('module', 'required_credits')
+                        AND fv.verification_status='verified'
+                    ) = 2
+                  )
               )
+            ORDER BY p.program_id
             """
+        )
+        active_program_ids = {
+            str(row["program_id"]) for row in active_program_rows
+        }
+        answerable_program_ids = {
+            str(row["program_id"]) for row in answerable_program_rows
+        }
+        unanswerable_program_ids = sorted(
+            active_program_ids - answerable_program_ids
         )
         reasons: list[str] = []
         if not verified_sections:
@@ -912,8 +1906,16 @@ class AcademicRepository:
             reasons.append("verified_requirement_evidence_missing")
         if not verified_policy_evidence:
             reasons.append("verified_policy_evidence_missing")
-        if not answerable_programs:
+        if not active_program_ids:
+            reasons.append("active_program_missing")
+        if not answerable_program_ids:
             reasons.append("core_business_unanswerable")
+        if unanswerable_program_ids:
+            reasons.append("program_readiness_incomplete")
+            reasons.extend(
+                f"program_unanswerable:{program_id}"
+                for program_id in unanswerable_program_ids
+            )
         return not reasons, tuple(reasons)
 
     def options(self) -> dict[str, object]:
@@ -1292,21 +2294,62 @@ class AcademicRepository:
         return tuple(str(row["program_id"]) for row in rows)
 
     def retrieval_documents(self) -> tuple[dict[str, object], ...]:
-        """Expose source sections with all metadata required by policy retrieval.
+        """Expose only explicitly taxonomy-approved policy evidence.
 
-        The provider is database-backed and data-driven: a section is associated
-        with program ids only when its source is the authoritative source for
-        one or more catalog programs.  School-wide documents intentionally omit
-        ``program_ids`` rather than inheriting a guessed program scope.
+        The index backing the policy route should never contain curriculum or
+        course-catalog passages.  Taxonomy is source-registry data, not a
+        title/text heuristic.  The only exception is an unversioned direct-SQL
+        compatibility database used by historical unit tests; released legacy
+        artifacts remain fail-closed.
         """
 
+        has_taxonomy = self._has_table("source_taxonomy")
+        has_authenticity = self._has_table("source_authenticity")
+        has_quality = self._has_table("section_extraction_quality")
+        legacy_untyped = self._legacy_untyped_taxonomy_compatibility()
+        taxonomy_join = (
+            "LEFT JOIN source_taxonomy st ON st.source_id=s.source_id"
+            if has_taxonomy
+            else ""
+        )
+        authenticity_join = (
+            "LEFT JOIN source_authenticity sa ON sa.source_id=s.source_id"
+            if has_authenticity
+            else ""
+        )
+        quality_join = (
+            "LEFT JOIN section_extraction_quality sq ON sq.chunk_id=ss.chunk_id"
+            if has_quality
+            else ""
+        )
+        doc_type = "COALESCE(st.doc_type, 'unknown')" if has_taxonomy else "'unknown'"
+        topics = "COALESCE(st.topics_json, '[]')" if has_taxonomy else "'[]'"
+        authenticity = (
+            "COALESCE(sa.authenticity_status, 'unverified')"
+            if has_authenticity
+            else "'unverified'"
+        )
+        quality = (
+            "COALESCE(sq.extraction_quality, 'review_required')"
+            if has_quality
+            else "'review_required'"
+        )
+        policy_type_sql = ", ".join(repr(item) for item in sorted(POLICY_DOCUMENT_TYPES))
+        policy_filter = "" if legacy_untyped else f"WHERE {doc_type} IN ({policy_type_sql})"
         rows = self._all(
-            """
+            f"""
             SELECT ss.chunk_id, ss.text, ss.source_id, ss.article, ss.physical_page, ss.parser_version, ss.extracted_at, ss.confidence,
                    ss.review_status, s.title, s.page_url, s.file_url, s.college_id,
                    s.cohort, s.authority_level, s.effective_from, s.effective_to,
-                   s.status, s.supersedes_source_id, s.source_sha256
-            FROM source_sections ss JOIN sources s ON s.source_id=ss.source_id
+                   s.status, s.supersedes_source_id, s.source_sha256,
+                   {doc_type} AS doc_type, {topics} AS topics_json,
+                   {authenticity} AS source_authenticity, {quality} AS extraction_quality
+            FROM source_sections ss
+            JOIN sources s ON s.source_id=ss.source_id
+            {taxonomy_join}
+            {authenticity_join}
+            {quality_join}
+            {policy_filter}
             ORDER BY ss.chunk_id
             """
         )
@@ -1321,6 +2364,15 @@ class AcademicRepository:
         programs_by_source = {source_id: tuple(values) for source_id, values in grouped.items()}
         documents: list[dict[str, object]] = []
         for row in rows:
+            try:
+                decoded_topics = json.loads(str(row["topics_json"] or "[]"))
+            except json.JSONDecodeError:
+                decoded_topics = []
+            topics_value = (
+                tuple(topic for topic in decoded_topics if isinstance(topic, str))
+                if isinstance(decoded_topics, list)
+                else ()
+            )
             document: dict[str, object] = {
                 "chunk_id": str(row["chunk_id"]),
                 "text": str(row["text"]),
@@ -1342,6 +2394,10 @@ class AcademicRepository:
                 "parser_version": str(row["parser_version"]),
                 "extracted_at": str(row["extracted_at"]),
                 "confidence": float(row["confidence"]),
+                "doc_type": str(row["doc_type"]),
+                "topics": topics_value,
+                "source_authenticity": str(row["source_authenticity"]),
+                "extraction_quality": str(row["extraction_quality"]),
             }
             program_ids = programs_by_source.get(str(row["source_id"]), ())
             if program_ids:
@@ -1369,13 +2425,23 @@ class AcademicRepository:
         """Filter retrieval documents by explicit cohort, program and college scope."""
 
         effective_date = self._policy_as_of(as_of)
-        requested_programs = set(program_ids)
-        requested_colleges = set(college_ids)
-        requested_colleges.update(self.college_ids_for_programs(program_ids))
+        requested_colleges = tuple(
+            dict.fromkeys((*college_ids, *self.college_ids_for_programs(program_ids)))
+        )
         scoped: list[dict[str, object]] = []
         for document in self.retrieval_documents():
-            document_cohort = str(document["cohort"])
-            if cohort is not None and document_cohort not in {"不限", str(cohort)}:
+            if str(document.get("doc_type") or "unknown") not in POLICY_DOCUMENT_TYPES:
+                # ``retrieval_documents`` already enforces this for a released
+                # projection.  Keep a second hard guard so a compatibility
+                # source cannot leak an untyped curriculum document through a
+                # scoped policy call.
+                continue
+            if not policy_scope_matches(
+                document,
+                cohort=cohort,
+                program_ids=program_ids,
+                college_ids=requested_colleges,
+            ):
                 continue
             if as_of is None and str(document["status"]) != "现行":
                 continue
@@ -1384,27 +2450,6 @@ class AcademicRepository:
             if effective_from is not None and effective_from > effective_date:
                 continue
             if effective_to is not None and effective_to < effective_date:
-                continue
-            document_college = str(document.get("college_id") or "")
-            if requested_colleges and document_college not in {
-                "",
-                "全校",
-                "校级",
-                *requested_colleges,
-            }:
-                continue
-            raw_program_ids = document.get("program_ids", ())
-            document_programs = (
-                set(raw_program_ids)
-                if isinstance(raw_program_ids, tuple)
-                and all(isinstance(program_id, str) for program_id in raw_program_ids)
-                else set()
-            )
-            if (
-                requested_programs
-                and document_programs
-                and not document_programs.intersection(requested_programs)
-            ):
                 continue
             scoped.append(document)
         return tuple(scoped)
@@ -1522,12 +2567,26 @@ class AcademicRepository:
         source_to = "CASE WHEN length(s.effective_to)=4 THEN s.effective_to || '-12-31' ELSE s.effective_to END"
         newer_from = "CASE WHEN length(newer.effective_from)=4 THEN newer.effective_from || '-01-01' ELSE newer.effective_from END"
         newer_to = "CASE WHEN length(newer.effective_to)=4 THEN newer.effective_to || '-12-31' ELSE newer.effective_to END"
+        has_taxonomy = self._has_table("source_taxonomy")
+        legacy_untyped = self._legacy_untyped_taxonomy_compatibility()
+        taxonomy_join = (
+            "LEFT JOIN source_taxonomy st ON st.source_id=s.source_id"
+            if has_taxonomy
+            else ""
+        )
+        taxonomy_column = "COALESCE(st.doc_type, 'unknown')" if has_taxonomy else "'unknown'"
+        policy_type_sql = ", ".join(repr(item) for item in sorted(POLICY_DOCUMENT_TYPES))
+        taxonomy_scope = (
+            "" if legacy_untyped else f" AND {taxonomy_column} IN ({policy_type_sql})"
+        )
         rows = self._all(
             f"""
             SELECT ss.*, s.title, s.page_url, s.file_url, s.authority_level, s.status, s.cohort, s.college_id,
-                   s.published_at, s.effective_from, s.effective_to, s.source_sha256
+                   s.published_at, s.effective_from, s.effective_to, s.source_sha256,
+                   {taxonomy_column} AS doc_type
             FROM source_sections ss JOIN sources s ON s.source_id=ss.source_id
-            WHERE ({where}){scope}{status_scope}
+            {taxonomy_join}
+            WHERE ({where}){scope}{status_scope}{taxonomy_scope}
               AND ({source_from} IS NULL OR {source_from}='' OR {source_from} <= ?)
               AND ({source_to} IS NULL OR {source_to}='' OR {source_to} >= ?)
               AND NOT EXISTS (
@@ -1616,23 +2675,31 @@ class AcademicRepository:
                 for program_id, values in code_sets.items()
             }
         if "required_courses" in requested:
-            result["required_course_difference"] = sorted(
-                {
-                    course.code or course.name
-                    for values in groups.values()
-                    for course in values
-                    if "必修" in (course.nature or "")
-                }
-            )
+            # Preserve the producer scope. A cross-program union cannot answer
+            # which requirement belongs to which program and previously made a
+            # comparison look complete while discarding its central relation.
+            result["required_courses_by_program"] = {
+                program_id: sorted(
+                    {
+                        course.code or course.name
+                        for course in values
+                        if "必修" in (course.nature or "")
+                    }
+                )
+                for program_id, values in groups.items()
+            }
         if "practice_requirements" in requested:
-            result["practice_requirements"] = sorted(
-                {
-                    course.name
-                    for values in groups.values()
-                    for course in values
-                    if "实践" in (course.nature or "") or "实践" in course.module_name
-                }
-            )
+            result["practice_requirements_by_program"] = {
+                program_id: sorted(
+                    {
+                        course.code or course.name
+                        for course in values
+                        if "实践" in (course.nature or "")
+                        or "实践" in course.module_name
+                    }
+                )
+                for program_id, values in groups.items()
+            }
         if "module_requirements" in requested or "graduation_min_credits" in requested:
             module_values: dict[str, list[dict[str, object]]] = {}
             for program_id in program_ids:

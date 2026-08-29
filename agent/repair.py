@@ -45,10 +45,24 @@ class RepairPlanner:
                 "args": widened,
             }
         )
+        output_contract = tuple(
+            contract.model_copy(
+                update={
+                    "operation_ids": (operation.operation_id,)
+                    if contract.output == "policy_explanation"
+                    else contract.operation_ids,
+                    "status": "fulfilled"
+                    if contract.output == "policy_explanation"
+                    else contract.status,
+                }
+            )
+            for contract in original_plan.output_contract
+        )
         return ExecutionPlan(
             plan_id=stable_id("plan", original_plan.plan_id, "policy-repair"),
             query=query,
             operations=(operation,),
+            output_contract=output_contract,
             rationale=("coverage_gate:policy_support_insufficient",),
         )
 

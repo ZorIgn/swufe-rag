@@ -5,14 +5,14 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from datetime import date, datetime
 from time import perf_counter
-from typing import SupportsFloat, SupportsIndex
+from typing import Protocol, SupportsFloat, SupportsIndex
 
 import numpy as np
 
-from retrieval.dense import DenseFaissIndex, DenseUnavailableError
+from retrieval.dense import DenseUnavailableError
 from retrieval.lexical import BM25LexicalIndex, tokenize
 from retrieval.models import PolicyRetrievalRequest, PolicyRetrievalResult
-from retrieval.reranker import CrossEncoderReranker
+from retrieval.scope import policy_scope_matches
 from retrieval.scoring import RetrievedCandidate, presentation_score, reciprocal_rank_fusion
 
 
@@ -77,17 +77,11 @@ def _scope_match(document: dict[str, object], request: PolicyRetrievalRequest) -
         return False
     if request.as_of is None and str(document.get("status") or "") != "现行":
         return False
-    cohort = str(document.get("cohort") or "不限")
-    if request.cohort is not None and cohort not in {"不限", str(request.cohort)}:
-        return False
-    college = str(document.get("college_id") or "")
-    if request.college_ids and college not in {"", "校级", "全校", *request.college_ids}:
-        return False
-    scoped_programs = _string_values(document.get("program_ids", ()))
-    if (
-        scoped_programs
-        and request.program_ids
-        and not set(scoped_programs).intersection(request.program_ids)
+    if not policy_scope_matches(
+        document,
+        cohort=request.cohort,
+        program_ids=request.program_ids,
+        college_ids=request.college_ids,
     ):
         return False
     if not request.topics:
@@ -114,6 +108,30 @@ def _exact_entity_score(query: str, document: dict[str, object]) -> float:
     return sum(1.0 for term in terms if term in haystack)
 
 
+class DenseIndex(Protocol):
+    chunk_ids: tuple[str, ...]
+    dimension: int
+
+    def vector_for(self, chunk_id: str) -> np.ndarray | None: ...
+
+    def rank(
+        self,
+        query: str,
+        documents: dict[str, dict[str, object]],
+        candidate_ids: set[str],
+        *,
+        limit: int,
+    ) -> tuple[RetrievedCandidate, ...]: ...
+
+
+class CandidateReranker(Protocol):
+    def rerank(
+        self,
+        query: str,
+        candidates: Iterable[RetrievedCandidate],
+    ) -> tuple[RetrievedCandidate, ...]: ...
+
+
 class HybridPolicyRetriever:
     """Production policy retrieval with real BM25, optional dense RRF, rerank and MMR."""
 
@@ -122,8 +140,8 @@ class HybridPolicyRetriever:
         documents: Iterable[dict[str, object]],
         *,
         mode: str = "lexical",
-        dense_index: DenseFaissIndex | None = None,
-        reranker: CrossEncoderReranker | None = None,
+        dense_index: DenseIndex | None = None,
+        reranker: CandidateReranker | None = None,
         dataset_version: str = "unknown",
         index_version: str | None = None,
         expected_chunk_ids: tuple[str, ...] | None = None,
@@ -318,12 +336,21 @@ class HybridPolicyRetriever:
             )
         if self._dense is None or self._reranker is None:
             raise DenseUnavailableError("hybrid policy retrieval is not ready")
+        dense_scope_ids = set(ids)
         dense = self._dense.rank(
             request.query,
             self._documents,
-            set(ids),
+            dense_scope_ids,
             limit=max(request.top_k * 8, request.top_k),
         )
+        leaked_dense_ids = tuple(
+            item.chunk_id for item in dense if item.chunk_id not in dense_scope_ids
+        )
+        if leaked_dense_ids:
+            raise DenseUnavailableError(
+                "dense retriever returned out-of-scope candidates: "
+                + ", ".join(sorted(set(leaked_dense_ids)))
+            )
         lexical_by_id = {item.chunk_id: item for item in lexical}
         dense_by_id = {item.chunk_id: item for item in dense}
         rrf = reciprocal_rank_fusion(
@@ -357,8 +384,7 @@ class HybridPolicyRetriever:
         relevant = tuple(
             item
             for item in reranked
-            if item.reranker_score is not None
-            and item.reranker_score >= self._reranker_min_score
+            if item.reranker_score is not None and item.reranker_score >= self._reranker_min_score
         )
         diversified = self._mmr(relevant, limit=request.top_k)
         values = tuple(
@@ -392,4 +418,4 @@ class HybridPolicyRetriever:
         )
 
 
-__all__ = ["HybridPolicyRetriever"]
+__all__ = ["CandidateReranker", "DenseIndex", "HybridPolicyRetriever"]

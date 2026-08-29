@@ -5,27 +5,21 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from hashlib import sha256
-from typing import Literal
+from typing import Literal, cast
 from urllib.parse import urlsplit, urlunsplit
 
 from ingest.contracts import KnowledgeChunk, validate_chunk
 from ingest.models import DocumentElement, ParsedDocument, SourceRecord
-from ingest.parse import join_wrapped_lines, normalize_text
+from ingest.parse import extraction_quality_ledger, join_wrapped_lines, normalize_text
 
 _NUMERALS = "〇零一二三四五六七八九十百千万0-9"
 _CHAPTER_RE = re.compile(rf"^\s*(第[{_NUMERALS}]+[章节])\s*(.*?)\s*$")
 _ARTICLE_RE = re.compile(rf"^\s*(第[{_NUMERALS}]+条)\s*(.*?)\s*$")
 _CN_HEADING_RE = re.compile(rf"^\s*([{_NUMERALS}]+、)\s*(.*?)\s*$")
 _LIST_ITEM_RE = re.compile(r"^\s*(\d{1,3})\s*[.·、]\s*(.+)$")
-_PROGRAM_HEADING_RE = re.compile(
-    r"^.{2,100}(?:专业|专业类|计算机类).{0,40}(?:本科)?人才培养方案$"
-)
-_PROGRAM_BODY_START_RE = re.compile(
-    r"^西南财经大学(.{2,80}?(?:专业|专业类))人才培养"
-)
-_INLINE_BOUNDARY_RE = re.compile(
-    rf"(?<=[。！？；;])(?=第[{_NUMERALS}]+(?:条|章|节))"
-)
+_PROGRAM_HEADING_RE = re.compile(r"^.{2,100}(?:专业|专业类|计算机类).{0,40}(?:本科)?人才培养方案$")
+_PROGRAM_BODY_START_RE = re.compile(r"^西南财经大学(.{2,80}?(?:专业|专业类))人才培养")
+_INLINE_BOUNDARY_RE = re.compile(rf"(?<=[。！？；;])(?=第[{_NUMERALS}]+(?:条|章|节))")
 _SENTENCE_RE = re.compile(r".*?(?:[。！？；;]|\n+|$)", re.S)
 
 # Parsing creates traceable evidence, but it is not a human verification step.
@@ -138,8 +132,7 @@ def _split_body(text: str, limit: int) -> list[str]:
                 parts.append(current)
                 current = ""
             parts.extend(
-                sentence[start : start + limit]
-                for start in range(0, len(sentence), limit)
+                sentence[start : start + limit] for start in range(0, len(sentence), limit)
             )
             continue
         candidate = sentence if not current else current + sentence
@@ -152,6 +145,7 @@ def _split_body(text: str, limit: int) -> list[str]:
         parts.append(current)
     return parts
 
+
 def _split_table(markdown: str, limit: int) -> list[str]:
     """Split large Markdown tables on row boundaries and repeat the header."""
 
@@ -161,7 +155,8 @@ def _split_table(markdown: str, limit: int) -> list[str]:
     lines = [line for line in markdown.splitlines() if line.strip()]
     header_lines = (
         lines[:2]
-        if len(lines) >= 2 and lines[0].lstrip().startswith("|")
+        if len(lines) >= 2
+        and lines[0].lstrip().startswith("|")
         and lines[1].lstrip().startswith("|")
         else []
     )
@@ -182,8 +177,7 @@ def _split_table(markdown: str, limit: int) -> list[str]:
                 current = []
                 current_len = len(fixed)
             groups.extend(
-                [[row[start : start + row_budget]]
-                 for start in range(0, len(row), row_budget)]
+                [[row[start : start + row_budget]] for start in range(0, len(row), row_budget)]
             )
             continue
         if current and current_len + needed > limit:
@@ -198,6 +192,7 @@ def _split_table(markdown: str, limit: int) -> list[str]:
         return _split_body(intro + markdown, limit)
     return [fixed + "\n".join(group) for group in groups]
 
+
 def _page_url(source: SourceRecord, page: int | None) -> str:
     """Return an exact PDF page link when the source is the original file."""
 
@@ -208,6 +203,15 @@ def _page_url(source: SourceRecord, page: int | None) -> str:
         return source.page_url
     parsed = urlsplit(base_url)
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, parsed.query, f"page={page}"))
+
+
+def _quality_by_page(document: ParsedDocument) -> dict[int | None, dict[str, object]]:
+    """Index parser quality evidence without allowing generated chunks to verify it."""
+
+    return {
+        entry["page"] if isinstance(entry.get("page"), int) else None: entry
+        for entry in extraction_quality_ledger(document)
+    }
 
 
 def build_chunks(
@@ -221,6 +225,7 @@ def build_chunks(
     source_key = f"{source.file}|{source.doc_title}|{source.year}"
     prefix_id = sha256(source_key.encode("utf-8")).hexdigest()[:12]
     chunks: list[KnowledgeChunk] = []
+    quality_by_page = _quality_by_page(document)
 
     for segment in _segments(document.elements):
         article = segment.article or "正文"
@@ -232,6 +237,13 @@ def build_chunks(
             bodies = _split_table(segment.text, chunk_max_len - len(prefix))
         else:
             bodies = _split_body(segment.text, chunk_max_len - len(prefix))
+        quality = quality_by_page.get(segment.page) or quality_by_page.get(None, {})
+        extraction_quality = str(quality.get("status") or "review_required")
+        extraction_warnings = [
+            str(value)
+            for value in cast(list[object], quality.get("warnings", []))
+            if isinstance(value, str) and value.strip()
+        ]
         for body in bodies:
             text = f"《{source.doc_title}》{article}\n{body}".strip()
             chunk: KnowledgeChunk = {
@@ -248,7 +260,13 @@ def build_chunks(
                 "file_url": source.file_url,
                 "is_table": segment.is_table,
                 "review_status": GENERATED_REVIEW_STATUS,
+                "doc_type": cast(Literal["policy", "notice", "guide", "curriculum", "course_catalog", "unknown"], source.doc_type),
+                "topics": list(source.topics),
+                "extraction_quality": cast(Literal["verified", "review_required", "failed"], extraction_quality),
+                "extraction_warnings": extraction_warnings,
             }
+            if source.source_sha256 is not None:
+                chunk["source_sha256"] = source.source_sha256
             chunks.append(validate_chunk(chunk))
     if not chunks:
         raise ValueError(f"source produced no chunks: {source.file}")

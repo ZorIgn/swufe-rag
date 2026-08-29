@@ -171,8 +171,6 @@ class AgentRuntime:
             )
             state.normalized_query = normalized
         self._deps.tracer.increment("request_total", intent=normalized.intent)
-        if normalized.missing_fields:
-            return self._clarify(state, normalized)
 
         state.transition(AgentStatus.PLAN)
         with self._deps.tracer.start(
@@ -180,13 +178,27 @@ class AgentRuntime:
         ):
             plan = self._deps.planner(normalized)
             state.plan = plan
+            state.output_contracts = list(plan.output_contract)
         if not plan.operations:
+            actual_offerings = any(
+                "actual_offerings_not_supported" in contract.reasons
+                for contract in plan.output_contract
+            )
+            if normalized.missing_fields and not actual_offerings:
+                return self._clarify(state, normalized)
             state.transition(AgentStatus.CLARIFY)
+            clarification = (
+                "当前服务不接入教务实时开课、选课名额或选课系统数据；"
+                "请以学校教务系统为准，或明确询问培养方案中的计划课程。"
+                if actual_offerings
+                else "当前请求的输出均缺少必要范围、实体或已实现的数据能力；"
+                "请补充条件或改为具体的培养方案、课程或校务规定问题。"
+            )
             answer = FinalAnswer(
-                answer_md="该请求不需要或不适合调用校务知识工具。",
+                answer_md=clarification,
                 claims=(),
                 citations=(),
-                clarification="请改为具体的培养方案或校务规定问题。",
+                clarification=clarification,
             )
             state.answer = answer
             self._deps.tracer.increment("clarification_total", intent=normalized.intent)
@@ -198,6 +210,7 @@ class AgentRuntime:
         while True:
             state.transition(AgentStatus.COVERAGE_CHECK)
             decision = self._deps.coverage_gate.evaluate(normalized, plan, packet)
+            state.output_contracts = list(decision.output_statuses)
             if decision.sufficient:
                 break
             self._deps.tracer.increment("coverage_failure_total", intent=normalized.intent)
@@ -213,6 +226,22 @@ class AgentRuntime:
                 packet = _merge_packets(
                     packet, repair_packet, stable_id("packet", plan.plan_id, "repair")
                 )
+                combined_operations = tuple(
+                    {
+                        operation.operation_id: operation
+                        for operation in (*plan.operations, *repair_plan.operations)
+                    }.values()
+                )
+                plan = ExecutionPlan(
+                    plan_id=stable_id("plan", plan.plan_id, repair_plan.plan_id),
+                    query=normalized,
+                    operations=combined_operations,
+                    output_contract=repair_plan.output_contract,
+                    rationale=tuple(
+                        dict.fromkeys((*plan.rationale, *repair_plan.rationale))
+                    ),
+                )
+                state.plan = plan
                 state.evidence = packet
                 continue
             return self._coverage_stop(state, normalized, packet, decision)
@@ -226,6 +255,15 @@ class AgentRuntime:
                 "citation_not_supporting_claim",
                 "claim_not_entailed_by_fact",
                 "predicate_polarity_conflict",
+                "claim_atom_comparator_mismatch",
+                "claim_text_atom_comparator_missing",
+                "claim_text_atom_value_mismatch",
+                "claim_text_atom_unit_missing",
+                "claim_text_atom_condition_missing",
+                "claim_text_atom_exception_missing",
+                "claim_text_atom_scope_missing",
+                "claim_text_atom_temporal_missing",
+                "claim_atom_evidence_span_mismatch",
             }:
                 state.transition(AgentStatus.REGENERATE)
                 state.regeneration_count += 1
@@ -242,10 +280,6 @@ class AgentRuntime:
                 {
                     "program_id": normalized.program_ids[0] if normalized.program_ids else None,
                     "cohort": normalized.cohort,
-                    "last_intent": normalized.intent,
-                    "last_tool_results": [
-                        item.model_dump(mode="json") for item in packet.execution_results
-                    ],
                 },
             )
         return answer, state
@@ -329,7 +363,7 @@ class AgentRuntime:
     ) -> FinalAnswer:
         state.transition(AgentStatus.SYNTHESIZE)
         with self._deps.tracer.start("synthesis", request_id=state.request_id):
-            answer = synthesizer.synthesize(self._normalized_query(state), packet)
+            answer = synthesizer.synthesize(self._synthesis_query(state), packet)
         return self._validate_same_packet(state, packet, answer=answer)
 
     @staticmethod
@@ -338,6 +372,35 @@ class AgentRuntime:
         if query is None:
             raise RuntimeError("agent state has no normalized query")
         return query
+
+    @classmethod
+    def _synthesis_query(cls, state: AgentState) -> NormalizedQuery:
+        """Project runtime output eligibility into the wording layer.
+
+        The normalizer keeps a union of missing fields for clarification UX.
+        Once the per-output gate has fulfilled at least one contract, those
+        global fields must not suppress that safe output.  Runtime-unavailable
+        outputs are also excluded so facts from a sibling operation cannot be
+        rendered under the wrong section.
+        """
+
+        query = cls._normalized_query(state)
+        unavailable = tuple(
+            contract.output
+            for contract in state.output_contracts
+            if contract.status != "fulfilled"
+        )
+        has_fulfilled = any(
+            contract.status == "fulfilled" for contract in state.output_contracts
+        )
+        return query.model_copy(
+            update={
+                "missing_fields": () if has_fulfilled else query.missing_fields,
+                "unsupported_outputs": tuple(
+                    dict.fromkeys((*query.unsupported_outputs, *unavailable))
+                ),
+            }
+        )
 
     def _validate_same_packet(
         self,
@@ -349,7 +412,7 @@ class AgentRuntime:
     ) -> FinalAnswer:
         if answer is None:
             assert synthesizer is not None
-            answer = synthesizer.synthesize(self._normalized_query(state), packet)
+            answer = synthesizer.synthesize(self._synthesis_query(state), packet)
         state.transition(AgentStatus.VALIDATE)
         with self._deps.tracer.start("validation", request_id=state.request_id):
             validated = self._deps.validator.validate(answer, packet)

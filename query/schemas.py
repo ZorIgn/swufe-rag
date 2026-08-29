@@ -42,6 +42,7 @@ RequestedOutput = Literal[
     "course_plan",
     "feasibility",
 ]
+OutputStatus = Literal["fulfilled", "refused", "unsupported", "missing_data"]
 InformationScope = Literal["curriculum", "actual_offerings", "policy", "unknown"]
 
 
@@ -60,6 +61,7 @@ class UnderstandingDraft(StrictModel):
         "general",
     ]
     requested_outputs: tuple[RequestedOutput, ...] = ()
+    policy_topics: tuple[str, ...] = ()
     program_mentions: tuple[str, ...] = ()
     cohort: int | None = Field(default=None, ge=2010, le=2100)
     current_stage: AcademicStage | None = None
@@ -100,6 +102,7 @@ class NormalizedQuery(StrictModel):
     raw_question: str = Field(min_length=1, max_length=4000)
     intent: Intent
     requested_outputs: tuple[RequestedOutput, ...] = ()
+    policy_topics: tuple[str, ...] = ()
     cohort: int | None = Field(default=None, ge=2010, le=2100)
     program_ids: tuple[str, ...] = ()
     program_names: tuple[str, ...] = ()
@@ -126,6 +129,7 @@ class NormalizedQuery(StrictModel):
     ] = ()
     information_scope: Literal["curriculum", "actual_offerings", "policy", "unknown"]
     missing_fields: tuple[str, ...] = ()
+    unsupported_outputs: tuple[RequestedOutput, ...] = ()
     warnings: tuple[str, ...] = ()
 
 
@@ -205,11 +209,21 @@ class CompareProgramsArgs(StrictModel):
             "practice_requirements",
         ],
         ...,
-    ] = ("graduation_min_credits", "module_requirements", "course_sets")
+    ] = ("module_requirements", "course_sets")
 
 
 class ResolveSourceArgs(StrictModel):
     chunk_id: str
+
+
+class OutputContract(StrictModel):
+    """Explicit plan/coverage contract for one requested answer component."""
+
+    output: RequestedOutput
+    capabilities: tuple[str, ...] = ()
+    status: OutputStatus
+    operation_ids: tuple[str, ...] = ()
+    reasons: tuple[str, ...] = ()
 
 
 class OperationBase(StrictModel):
@@ -310,6 +324,7 @@ class ExecutionPlan(StrictModel):
     plan_id: str
     query: NormalizedQuery
     operations: tuple[Operation, ...]
+    output_contract: tuple[OutputContract, ...] = ()
     rationale: tuple[str, ...] = ()
 
 
@@ -339,6 +354,8 @@ __all__ = [name for name in globals() if name.endswith(("Args", "Operation"))] +
     "Intent",
     "NormalizedQuery",
     "Operation",
+    "OutputContract",
+    "OutputStatus",
     "ResolvedEntity",
     "UnderstandingDraft",
     "StageTerm",

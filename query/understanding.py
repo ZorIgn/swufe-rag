@@ -28,7 +28,25 @@ SEMESTER_RE = re.compile(r"第?\s*([1-8])\s*(?:学期|semester)", re.I)
 STAGE_RE = re.compile(r"大\s*([一二三四1234])\s*([上下])?")
 DEADLINE_SEMESTER_RE = re.compile(r"第?\s*([1-8])\s*(?:学期)?\s*(?:前|之前|以前|截止)")
 DEADLINE_STAGE_RE = re.compile(r"大\s*([一二三四1234])\s*(?:前|之前|以前)")
-COURSE_CODE_RE = re.compile(r"\b([A-Za-z]{2,6}\s*\d{2,4})\b")
+# ``\b`` uses Unicode word characters, so it does *not* create a boundary
+# between Chinese text and ``TST101`` (both sides count as ``\w``).  Course
+# codes are ASCII identifiers; use an ASCII-only guard so ``已修TST101`` is
+# recognized while ``prefixTST101suffix`` still is not.
+COURSE_CODE_RE = re.compile(r"(?<![A-Za-z0-9])([A-Za-z]{2,6}\s*\d{2,4})(?![A-Za-z0-9])")
+
+# Keep the taxonomy small and deterministic.  The values are the controlled
+# topic identifiers written to ``RetrievePolicyArgs.topics``; the tuple holds
+# the natural-language markers that map to each identifier.  Chinese labels are
+# intentionally used as identifiers for compatibility with existing corpora
+# whose metadata is not yet normalized to English slugs.
+POLICY_TOPIC_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("转专业", ("转专业", "转系", "转院")),
+    ("免修", ("免修", "免考", "英语免修")),
+    ("学籍", ("学籍", "休学", "复学", "退学", "转学")),
+    ("考试", ("考试", "缓考", "补考", "重修")),
+    ("推免", ("推免", "保研", "推荐免试")),
+    ("毕业学位", ("毕业", "学位", "学位授予")),
+)
 
 
 def _year(value: str) -> int:
@@ -80,17 +98,37 @@ def _requested_outputs(
             values.append(value)
 
     asks_for_courses = (
-        intent in {"course_query", "course_detail", "course_planning"}
+        intent in {"course_query", "course_detail"}
         or ("有哪些" in compact and "课程" in compact)
         or any(
             token in compact
             for token in ("有哪些课程", "课程清单", "开什么课", "课程列表", "相关课程")
         )
     )
-    if asks_for_courses or codes:
-        add("course_detail" if codes else "course_list")
-    if any(token in compact for token in ("模块", "方向课", "专业选修")) and any(
+    completion_context = intent in {
+        "progress_audit",
+        "course_planning",
+        "curriculum_feasibility",
+    } and any(token in compact for token in ("已修", "修完", "完成"))
+    if asks_for_courses:
+        # A planning intent may explicitly request a course list, but a course
+        # code in an "already completed" clause must not silently turn into a
+        # course-detail answer component.
+        add("course_detail" if intent == "course_detail" else "course_list")
+    elif codes and not completion_context:
+        add("course_detail")
+
+    asks_module_requirement = any(
+        token in compact for token in ("模块", "方向课", "专业选修")
+    ) and any(
         token in compact for token in ("学分", "要求", "多少")
+    )
+    # "专业选修还差多少" is a progress computation, not a second request for
+    # a static module-requirement tool.  Preserve an explicit static request
+    # such as "最低要求" alongside an audit when the user asks both.
+    if asks_module_requirement and (
+        intent not in {"progress_audit", "course_planning", "curriculum_feasibility"}
+        or any(token in compact for token in ("最低", "要求", "规定"))
     ):
         add("module_requirements")
     if any(
@@ -109,25 +147,34 @@ def _requested_outputs(
         )
     ):
         add("policy_explanation")
-    if intent == "course_planning":
-        add("course_plan")
-    if intent == "curriculum_feasibility":
-        add("feasibility")
-    if not values:
-        fallback: dict[Intent, RequestedOutput] = {
-            "course_query": "course_list",
-            "course_detail": "course_detail",
-            "graduation_requirements": "graduation_requirements",
-            "module_requirements": "module_requirements",
-            "progress_audit": "progress_audit",
-            "compare_programs": "comparison",
-            "course_planning": "course_plan",
-            "curriculum_feasibility": "feasibility",
-            "policy": "policy_explanation",
-            "general": "policy_explanation",
-        }
-        add(fallback[intent])
+    # The primary intent is always an answer component.  Previously this was
+    # a fallback only, which let a lexical hint (e.g. "专业选修") replace the
+    # requested progress audit entirely.
+    primary_output: dict[Intent, RequestedOutput] = {
+        "course_query": "course_list",
+        "course_detail": "course_detail",
+        "graduation_requirements": "graduation_requirements",
+        "module_requirements": "module_requirements",
+        "progress_audit": "progress_audit",
+        "compare_programs": "comparison",
+        "course_planning": "course_plan",
+        "curriculum_feasibility": "feasibility",
+        "policy": "policy_explanation",
+        "general": "policy_explanation",
+    }
+    add(primary_output[intent])
     return tuple(values)
+
+
+def policy_topics_for_question(question: str) -> tuple[str, ...]:
+    """Map policy markers to the controlled retrieval topic taxonomy."""
+
+    compact = question.replace(" ", "")
+    return tuple(
+        topic
+        for topic, markers in POLICY_TOPIC_KEYWORDS
+        if any(marker in compact for marker in markers)
+    )
 
 
 def _comparison_dimensions(
@@ -203,7 +250,9 @@ def deterministic_understanding(question: str) -> UnderstandingDraft:
     intent: Intent
     if any(token in compact for token in ("对比", "比较", "区别", "差异")):
         intent = "compare_programs"
-    elif any(token in compact for token in ("来得及", "修得完", "能毕业", "是否毕业", "可行性")):
+    elif any(token in compact for token in ("来得及", "修得完", "能毕业", "是否毕业", "可行性")) or (
+        "修完" in compact and "毕业" in compact
+    ):
         intent = "curriculum_feasibility"
     elif deadline is not None or any(
         token in compact for token in ("之后还有哪些必修", "修读计划", "选课规划")
@@ -241,6 +290,7 @@ def deterministic_understanding(question: str) -> UnderstandingDraft:
         current_stage=stage,
         target_semesters=semesters,
         requested_outputs=_requested_outputs(compact, intent, codes, natures),
+        policy_topics=policy_topics_for_question(question),
         course_codes=codes,
         course_natures=natures,
         information_scope=scope,
@@ -284,4 +334,10 @@ class QuestionUnderstanding:
             )
 
 
-__all__ = ["QuestionUnderstanding", "StructuredModel", "deterministic_understanding"]
+__all__ = [
+    "POLICY_TOPIC_KEYWORDS",
+    "QuestionUnderstanding",
+    "StructuredModel",
+    "deterministic_understanding",
+    "policy_topics_for_question",
+]

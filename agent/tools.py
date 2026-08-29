@@ -798,32 +798,68 @@ def standard_registry(academic: AcademicTools, policy: RuntimePolicy) -> ToolReg
             for packet in dependencies
             for evidence in packet.evidence
         }
-        reasons: list[Fact] = []
+        reasons: list[Fact | DerivedFact] = []
         shortfall_found = False
         uncertainty_found = False
+
+        def derived_reason(
+            *,
+            key: str,
+            role: Literal["factual", "non_factual"] = "factual",
+            subject: str,
+            value: str,
+            inputs: tuple[Fact | DerivedFact, ...],
+        ) -> DerivedFact:
+            """Create an auditable feasibility rule evaluation.
+
+            Feasibility messages are derived conclusions, not observations.  A
+            factual one therefore carries the exact input-fact graph and the
+            evidence/record projection of those inputs.  Process-only
+            diagnostics can explicitly opt out via ``role=non_factual``.
+            """
+
+            return DerivedFact(
+                fact_id=stable_id("fact", operation.operation_id, key),
+                type="diagnostic" if role == "non_factual" else "progress",
+                role=role,
+                subject=subject,
+                predicate="feasibility_reason",
+                value=value,
+                comparator="satisfies",
+                source_record_ids=tuple(
+                    dict.fromkeys(
+                        record_id for fact in inputs for record_id in fact.source_record_ids
+                    )
+                ),
+                evidence_ids=tuple(
+                    dict.fromkeys(
+                        evidence_id for fact in inputs for evidence_id in fact.evidence_ids
+                    )
+                ),
+                operator="rule_evaluation",
+                input_fact_ids=tuple(dict.fromkeys(fact.fact_id for fact in inputs)),
+            )
 
         if len(dependencies) != 3 or not remaining_facts:
             uncertainty_found = True
             reasons.append(
-                Fact(
-                    fact_id=stable_id("fact", operation.operation_id, "missing_dependencies"),
-                    type="diagnostic",
+                derived_reason(
+                    key="missing_dependencies",
+                    role="non_factual",
                     subject="培养方案可行性",
-                    predicate="feasibility_reason",
                     value="缺少完整的培养方案要求或依赖计算结果。",
-                    derivation="tool_result",
+                    inputs=(),
                 )
             )
         if not requested_completed_ids.issubset(completed_ids):
             uncertainty_found = True
             reasons.append(
-                Fact(
-                    fact_id=stable_id("fact", operation.operation_id, "completed_id_mismatch"),
-                    type="diagnostic",
+                derived_reason(
+                    key="completed_id_mismatch",
+                    role="non_factual",
                     subject="培养方案可行性",
-                    predicate="feasibility_reason",
                     value="部分已修课程未出现在上游学业审计结果中。",
-                    derivation="tool_result",
+                    inputs=(),
                 )
             )
 
@@ -832,30 +868,14 @@ def standard_registry(academic: AcademicTools, policy: RuntimePolicy) -> ToolReg
             semester = _semester_number(_fact_value(values, "semester"))
             blocker_support = tuple(values.values())
             reasons.append(
-                Fact(
-                    fact_id=stable_id("fact", operation.operation_id, subject, "late_mandatory"),
-                    type="progress",
+                derived_reason(
+                    key=f"{subject}:late_mandatory",
                     subject=name,
-                    predicate="feasibility_reason",
                     value=(
                         f"{name}安排在第{semester}学期且尚未完成，"
                         f"不满足第{operation.args.deadline_semester}学期开始前完成的目标。"
                     ),
-                    source_record_ids=tuple(
-                        dict.fromkeys(
-                            record_id
-                            for fact in blocker_support
-                            for record_id in fact.source_record_ids
-                        )
-                    ),
-                    evidence_ids=tuple(
-                        dict.fromkeys(
-                            evidence_id
-                            for fact in blocker_support
-                            for evidence_id in fact.evidence_ids
-                        )
-                    ),
-                    derivation="tool_result",
+                    inputs=blocker_support,
                 )
             )
 
@@ -879,59 +899,40 @@ def standard_registry(academic: AcademicTools, policy: RuntimePolicy) -> ToolReg
             available = sum((_fact_float(fact.value) for fact in credit_facts), 0.0)
             missing_credit = any(values.get("credits") is None for values in candidates)
             credit_support: tuple[Fact | DerivedFact, ...] = (remaining_fact, *credit_facts)
-            support_evidence = tuple(
-                dict.fromkeys(
-                    evidence_id for fact in credit_support for evidence_id in fact.evidence_ids
-                )
-            )
-            support_records = tuple(
-                dict.fromkeys(
-                    record_id for fact in credit_support for record_id in fact.source_record_ids
-                )
-            )
             if available + 1e-9 < gap and missing_credit:
                 uncertainty_found = True
                 reasons.append(
-                    Fact(
-                        fact_id=stable_id("fact", operation.operation_id, module, "credits_unknown"),
-                        type="diagnostic",
+                    derived_reason(
+                        key=f"{module}:credits_unknown",
+                        role="non_factual",
                         subject=module,
-                        predicate="feasibility_reason",
                         value=f"{module}尚差{gap:g}学分，但边界前课程存在未标注学分，无法判断是否足够。",
-                        derivation="tool_result",
+                        inputs=credit_support,
                     )
                 )
             elif available + 1e-9 < gap:
                 shortfall_found = True
                 reasons.append(
-                    Fact(
-                        fact_id=stable_id("fact", operation.operation_id, module, "credit_shortfall"),
-                        type="progress",
+                    derived_reason(
+                        key=f"{module}:credit_shortfall",
                         subject=module,
-                        predicate="feasibility_reason",
                         value=(
                             f"{module}尚差{gap:g}学分，但第{operation.args.deadline_semester}"
                             f"学期开始前列明的未修课程仅有{available:g}学分。"
                         ),
-                        source_record_ids=support_records,
-                        evidence_ids=support_evidence,
-                        derivation="tool_result",
+                        inputs=credit_support,
                     )
                 )
             else:
                 reasons.append(
-                    Fact(
-                        fact_id=stable_id("fact", operation.operation_id, module, "capacity"),
-                        type="progress",
+                    derived_reason(
+                        key=f"{module}:capacity",
                         subject=module,
-                        predicate="feasibility_reason",
                         value=(
                             f"{module}尚差{gap:g}学分，边界前列明的未修课程共有"
                             f"{available:g}学分，可覆盖该最低学分差额。"
                         ),
-                        source_record_ids=support_records,
-                        evidence_ids=support_evidence,
-                        derivation="tool_result",
+                        inputs=credit_support,
                     )
                 )
 
@@ -942,13 +943,12 @@ def standard_registry(academic: AcademicTools, policy: RuntimePolicy) -> ToolReg
         ):
             uncertainty_found = True
             reasons.append(
-                Fact(
-                    fact_id=stable_id("fact", operation.operation_id, "semester_unknown"),
-                    type="diagnostic",
+                derived_reason(
+                    key="semester_unknown",
+                    role="non_factual",
                     subject="培养方案可行性",
-                    predicate="feasibility_reason",
                     value="仍有课程缺少可解析的开课学期，无法完成边界判断。",
-                    derivation="tool_result",
+                    inputs=(),
                 )
             )
 
@@ -963,23 +963,41 @@ def standard_registry(academic: AcademicTools, policy: RuntimePolicy) -> ToolReg
             status_text = "可行（仅按培养方案结构）"
             if all(_fact_float(fact.value) <= 0 for fact in remaining_facts):
                 reasons.append(
-                    Fact(
-                        fact_id=stable_id("fact", operation.operation_id, "all_requirements_met"),
-                        type="diagnostic",
+                    derived_reason(
+                        key="all_requirements_met",
                         subject="培养方案可行性",
-                        predicate="feasibility_reason",
                         value="所有已结构化模块的最低学分差额均为0，且未发现尚未完成的边界后必修或实践课程。",
-                        derivation="tool_result",
+                        inputs=remaining_facts,
                     )
                 )
 
-        status_fact = Fact(
+        status_inputs_by_id = {
+            fact.fact_id: fact
+            for packet in dependencies
+            for fact in packet.facts
+            if fact.role == "factual"
+        }
+        status_inputs = tuple(status_inputs_by_id.values())
+        status_fact = DerivedFact(
             fact_id=stable_id("fact", operation.operation_id, "status"),
             type="decision",
+            role="non_factual" if status == "insufficient_data" else "factual",
             subject="培养方案可行性",
             predicate="feasibility_status",
             value=status_text,
-            derivation="tool_result",
+            comparator="satisfies",
+            source_record_ids=tuple(
+                dict.fromkeys(
+                    record_id for fact in status_inputs for record_id in fact.source_record_ids
+                )
+            ),
+            evidence_ids=tuple(
+                dict.fromkeys(
+                    evidence_id for fact in status_inputs for evidence_id in fact.evidence_ids
+                )
+            ),
+            operator="rule_evaluation",
+            input_fact_ids=tuple(fact.fact_id for fact in status_inputs),
         )
         facts.extend((status_fact, *reasons))
         used_evidence_ids = {evidence_id for fact in facts for evidence_id in fact.evidence_ids}

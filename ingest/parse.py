@@ -83,9 +83,7 @@ class SidecarOCRProvider:
                 )
             text = item.get("text")
             if not isinstance(text, str) or not normalize_text(text):
-                raise ValueError(
-                    f"OCR page {page} is empty or invalid: {sidecar}"
-                )
+                raise ValueError(f"OCR page {page} is empty or invalid: {sidecar}")
             result[page] = text
         return result
 
@@ -103,8 +101,8 @@ _PAGE_MARK_RE = re.compile(r"^[—\-–]?\s*\d+(?:\s*/\s*\d+)?\s*[—\-–]?$")
 _WEB_PRINT_RE = re.compile(r"^\d{4}/\d{1,2}/\d{1,2}\s+\d{1,2}:\d{2}\b")
 _WEB_PRINT_SITE_SUFFIX = "-\u897f\u5357\u8d22\u7ecf\u5927\u5b66\u8ba1\u7b97\u673a\u4e0e\u4eba\u5de5\u667a\u80fd\u5b66\u9662"
 _WEB_PRINT_FOOTER = "\u7248\u6743\u6240\u6709@ \u897f\u5357\u8d22\u7ecf\u5927\u5b66"
-_WEB_PRINT_URL_RE = re.compile(
-    r"https://it\.swufe\.edu\.cn/info/\d+/\d+\.htm\s+\d+/\d+\s*$")
+_WEB_PRINT_URL_RE = re.compile(r"https://it\.swufe\.edu\.cn/info/\d+/\d+\.htm\s+\d+/\d+\s*$")
+_QUALITY_PREFIX = "quality:"
 
 
 def normalize_text(value: str) -> str:
@@ -151,8 +149,7 @@ def table_to_markdown(rows: list[list[Any]]) -> str:
     width = 0
     for row in rows:
         cells = [
-            normalize_text("" if cell is None else str(cell)).replace("|", "\\|")
-            for cell in row
+            normalize_text("" if cell is None else str(cell)).replace("|", "\\|") for cell in row
         ]
         width = max(width, len(cells))
         normalized.append(cells)
@@ -170,6 +167,145 @@ def table_to_markdown(rows: list[list[Any]]) -> str:
     return "\n".join(lines)
 
 
+def _quality_warning(
+    code: str,
+    *,
+    page: int | None = None,
+    critical: bool = False,
+    detail: str | None = None,
+) -> str:
+    """Encode parser quality events in a stable, JSON-safe warning string."""
+
+    fields = [_QUALITY_PREFIX.rstrip(":"), code]
+    if page is not None:
+        fields.append(f"page={page}")
+    if critical:
+        fields.append("critical=true")
+    if detail:
+        fields.append(f"detail={re.sub(r'[^A-Za-z0-9_.-]+', '_', detail)[:80]}")
+    return ":".join(fields)
+
+
+def _quality_warning_fields(warning: str) -> tuple[str, int | None, bool] | None:
+    """Decode warnings emitted by ``_quality_warning`` without trusting free text."""
+
+    if not warning.startswith(_QUALITY_PREFIX):
+        return None
+    values = warning.split(":")
+    if len(values) < 2 or not values[1]:
+        return None
+    page: int | None = None
+    critical = False
+    for value in values[2:]:
+        key, separator, candidate = value.partition("=")
+        if separator and key == "page" and candidate.isdigit() and int(candidate) > 0:
+            page = int(candidate)
+        elif separator and key == "critical" and candidate == "true":
+            critical = True
+    return values[1], page, critical
+
+
+def extraction_quality_ledger(document: ParsedDocument) -> list[dict[str, Any]]:
+    """Return page-scoped parser quality evidence without promoting verification.
+
+    ``ParsedDocument`` deliberately stays a compact parser boundary.  The
+    ledger is reconstructed from its page-bearing elements and structured
+    warning events so callers can persist quality independently from chunk
+    text.  Every successful extraction remains ``review_required`` until a
+    reviewer attests to the individual output.
+    """
+
+    element_pages = {element.page for element in document.elements if element.page is not None}
+    pages: Sequence[int | None]
+    if document.page_count is not None:
+        pages = list(range(1, document.page_count + 1))
+    elif element_pages:
+        pages = sorted(element_pages)
+    else:
+        pages = [None]
+
+    table_counts = {
+        page: sum(element.kind == "table" and element.page == page for element in document.elements)
+        for page in pages
+    }
+    entries: dict[int | None, dict[str, Any]] = {
+        page: {
+            "page": page,
+            "status": "review_required",
+            "table_status": "ok" if table_counts[page] else "not_present",
+            "ocr_status": "not_used",
+            "critical": False,
+            "issues": [],
+            "warnings": [],
+        }
+        for page in pages
+    }
+
+    def entry_for(page: int | None) -> dict[str, Any]:
+        if page not in entries:
+            entries[page] = {
+                "page": page,
+                "status": "review_required",
+                "table_status": "not_present",
+                "ocr_status": "not_used",
+                "critical": False,
+                "issues": [],
+                "warnings": [],
+            }
+        return entries[page]
+
+    has_structured_ocr = any(
+        (parsed := _quality_warning_fields(warning)) is not None and parsed[0] == "ocr_used"
+        for warning in document.warnings
+    )
+    for warning in document.warnings:
+        parsed = _quality_warning_fields(warning)
+        if parsed is None:
+            if warning in {"ocr_used", "partial_ocr_used"}:
+                # Older parser outputs did not record an OCR page.  Preserve
+                # the signal as a conservative document-wide fallback, but do
+                # not duplicate the richer structured events emitted today.
+                if has_structured_ocr:
+                    continue
+                for entry in entries.values():
+                    entry["ocr_status"] = "used"
+                    entry["issues"].append(warning)
+                    entry["warnings"].append(warning)
+                continue
+            # Keep historical/free-form warnings visible in the ledger rather
+            # than pretending an unclassified parser condition was clean.
+            entry = entry_for(None)
+            entry["issues"].append("parser_warning")
+            entry["warnings"].append(warning)
+            continue
+        code, page, critical = parsed
+        entry = entry_for(page)
+        entry["issues"].append(code)
+        entry["warnings"].append(warning)
+        entry["critical"] = bool(entry["critical"] or critical)
+        if code == "table_extraction_failed":
+            entry["table_status"] = "failed"
+            entry["status"] = "failed"
+        elif code == "ocr_used":
+            entry["ocr_status"] = "used"
+        elif code == "page_text_extraction_failed":
+            entry["ocr_status"] = "required"
+        elif code == "docx_inline_image":
+            entry["ocr_status"] = "not_performed"
+    return [
+        entries[page] for page in sorted(entries, key=lambda value: -1 if value is None else value)
+    ]
+
+
+def has_critical_table_failure(document: ParsedDocument) -> bool:
+    """Whether parser evidence says a catalog-critical table was not extracted."""
+
+    return any(
+        entry["table_status"] == "failed" and bool(entry["critical"])
+        for entry in extraction_quality_ledger(document)
+    )
+
+
 def _parse_docx(path: Path) -> ParsedDocument:
     try:
         from docx import Document
@@ -182,7 +318,7 @@ def _parse_docx(path: Path) -> ParsedDocument:
             "python-docx is required for DOCX parsing; run uv sync --extra ingest"
         ) from exc
 
-    document = Document(path)
+    document = Document(str(path))
     elements: list[DocumentElement] = []
     for child in document.element.body.iterchildren():
         if isinstance(child, CT_P):
@@ -191,15 +327,11 @@ def _parse_docx(path: Path) -> ParsedDocument:
             if not text:
                 continue
             style_name = paragraph.style.name if paragraph.style is not None else ""
-            kind: ElementKind = (
-                "heading" if _looks_like_heading(text, style_name) else "paragraph"
-            )
+            kind: ElementKind = "heading" if _looks_like_heading(text, style_name) else "paragraph"
             elements.append(DocumentElement(kind, text))
         elif isinstance(child, CT_Tbl):
             table = Table(child, document)
-            markdown = table_to_markdown(
-                [[cell.text for cell in row.cells] for row in table.rows]
-            )
+            markdown = table_to_markdown([[cell.text for cell in row.cells] for row in table.rows])
             if markdown:
                 elements.append(DocumentElement("table", markdown))
     if not elements:
@@ -207,15 +339,16 @@ def _parse_docx(path: Path) -> ParsedDocument:
     warnings: list[str] = []
     if document.inline_shapes:
         warnings.append(
-            f"contains {len(document.inline_shapes)} inline images; image text is not OCRed"
+            _quality_warning(
+                "docx_inline_image",
+                detail=f"count_{len(document.inline_shapes)}",
+            )
         )
     return ParsedDocument(path, elements, warnings=warnings)
 
 
 def _needs_ocr(page_texts: Sequence[str], *, minimum_chars_per_page: int = 80) -> bool:
-    meaningful = sum(
-        len(re.findall(r"[\u3400-\u9fffA-Za-z0-9]", text)) for text in page_texts
-    )
+    meaningful = sum(len(re.findall(r"[\u3400-\u9fffA-Za-z0-9]", text)) for text in page_texts)
     return meaningful < max(160, len(page_texts) * minimum_chars_per_page)
 
 
@@ -246,17 +379,46 @@ def _parse_pdf(path: Path, ocr_provider: OCRProvider | None) -> ParsedDocument:
         ) from exc
 
     page_texts: list[str] = []
-    page_tables: list[list[list[list[object]]]] = []
+    page_tables: list[list[list[list[str | None]]]] = []
     page_has_images: list[bool] = []
+    quality_warnings: list[str] = []
     with pdfplumber.open(path) as document:
         page_count = len(document.pages)
-        for page in document.pages:
-            page_texts.append(join_wrapped_lines(page.extract_text() or ""))
-            page_has_images.append(bool(page.images))
+        for page_number, page in enumerate(document.pages, start=1):
+            try:
+                page_texts.append(join_wrapped_lines(page.extract_text() or ""))
+            except Exception as exc:
+                page_texts.append("")
+                quality_warnings.append(
+                    _quality_warning(
+                        "page_text_extraction_failed",
+                        page=page_number,
+                        detail=type(exc).__name__,
+                    )
+                )
+            try:
+                page_has_images.append(bool(page.images))
+            except Exception as exc:
+                page_has_images.append(False)
+                quality_warnings.append(
+                    _quality_warning(
+                        "page_image_inspection_failed",
+                        page=page_number,
+                        detail=type(exc).__name__,
+                    )
+                )
             try:
                 page_tables.append(page.extract_tables() or [])
-            except Exception:
+            except Exception as exc:
                 page_tables.append([])
+                quality_warnings.append(
+                    _quality_warning(
+                        "table_extraction_failed",
+                        page=page_number,
+                        critical=True,
+                        detail=type(exc).__name__,
+                    )
+                )
 
     if _needs_ocr(page_texts):
         if ocr_provider is None:
@@ -264,11 +426,19 @@ def _parse_pdf(path: Path, ocr_provider: OCRProvider | None) -> ParsedDocument:
                 f"PDF has insufficient embedded text and requires OCR: {path.name}"
             )
         pages = ocr_provider.pages(path, expected_pages=page_count)
-        elements = [
-            DocumentElement("paragraph", join_wrapped_lines(text), page=index)
-            for index, text in enumerate(pages, start=1)
-        ]
-        return ParsedDocument(path, elements, page_count, ["ocr_used"])
+        ocr_elements: list[DocumentElement] = []
+        for page_number, text in enumerate(pages, start=1):
+            normalized = join_wrapped_lines(text)
+            if normalized:
+                ocr_elements.append(DocumentElement("paragraph", normalized, page=page_number))
+            quality_warnings.append(_quality_warning("ocr_used", page=page_number))
+            for rows in page_tables[page_number - 1]:
+                markdown = table_to_markdown(rows)
+                if markdown:
+                    ocr_elements.append(DocumentElement("table", markdown, page=page_number))
+        if not ocr_elements:
+            raise ValueError(f"PDF OCR and table extraction produced no content: {path}")
+        return ParsedDocument(path, ocr_elements, page_count, ["ocr_used", *quality_warnings])
 
     image_only_pages = [
         page_number
@@ -284,7 +454,7 @@ def _parse_pdf(path: Path, ocr_provider: OCRProvider | None) -> ParsedDocument:
                 f"PDF contains image-only pages that require OCR: {path.name} "
                 f"pages {image_only_pages}"
             )
-        partial_ocr = ocr_provider.page_map(path, expected_pages=page_count)  # type: ignore[attr-defined]
+        partial_ocr = ocr_provider.page_map(path, expected_pages=page_count)
         missing = sorted(set(image_only_pages) - set(partial_ocr))
         if missing:
             raise OCRRequiredError(
@@ -293,13 +463,17 @@ def _parse_pdf(path: Path, ocr_provider: OCRProvider | None) -> ParsedDocument:
 
     elements: list[DocumentElement] = []
     web_print_cleaned = False
-    for page_number, (text, tables) in enumerate(zip(page_texts, page_tables, strict=True), start=1):
+    for page_number, (text, tables) in enumerate(
+        zip(page_texts, page_tables, strict=True), start=1
+    ):
         web_print_page = _is_web_print_page(text)
         if text and not web_print_page:
             elements.append(DocumentElement("paragraph", text, page=page_number))
         elif page_number in partial_ocr:
             elements.append(
-                DocumentElement("paragraph", join_wrapped_lines(partial_ocr[page_number]), page=page_number)
+                DocumentElement(
+                    "paragraph", join_wrapped_lines(partial_ocr[page_number]), page=page_number
+                )
             )
         if web_print_page:
             web_print_cleaned = True
@@ -315,9 +489,14 @@ def _parse_pdf(path: Path, ocr_provider: OCRProvider | None) -> ParsedDocument:
                 elements.append(DocumentElement("table", markdown, page=page_number))
     if not elements:
         raise ValueError(f"PDF contains no extractable content: {path}")
-    warnings = ["web_print_noise_removed"] if web_print_cleaned else []
+    warnings = list(quality_warnings)
+    if web_print_cleaned:
+        warnings.append("web_print_noise_removed")
     if partial_ocr:
         warnings.append("partial_ocr_used")
+        warnings.extend(
+            _quality_warning("ocr_used", page=page_number) for page_number in sorted(partial_ocr)
+        )
     return ParsedDocument(path, elements, page_count, warnings)
 
 
