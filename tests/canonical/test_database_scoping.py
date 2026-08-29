@@ -104,6 +104,24 @@ def _repository(tmp_path: Path) -> AcademicRepository:
             ),
         )
         connection.executemany(
+            "INSERT INTO source_taxonomy VALUES (?, ?, ?)",
+            (
+                ("source-a", "curriculum", "[]"),
+                ("source-b", "curriculum", "[]"),
+                ("source-old", "curriculum", "[]"),
+                ("source-policy", "policy", '["transfer"]'),
+            ),
+        )
+        connection.executemany(
+            "INSERT INTO source_authenticity VALUES (?, ?, ?, ?, ?)",
+            (
+                ("source-a", "a-hash", "a-hash", "verified", "include"),
+                ("source-b", "b-hash", "b-hash", "verified", "include"),
+                ("source-old", "old-hash", "old-hash", "verified", "include"),
+                ("source-policy", "policy-hash", "policy-hash", "verified", "include"),
+            ),
+        )
+        connection.executemany(
             "INSERT INTO programs VALUES (?, ?, ?, ?, ?)",
             (
                 ("program-a", "专业甲", "学院甲", 2024, "source-a"),
@@ -164,6 +182,16 @@ def _repository(tmp_path: Path) -> AcademicRepository:
                 ("section-policy", "source-policy", "第二条", "学校范围内的政策。", 2, 0, "parser", "2026-01-01T00:00:00+00:00", 1.0, "review_required"),
             ),
         )
+        connection.executemany(
+            "INSERT INTO section_extraction_quality VALUES (?, ?, ?)",
+            (
+                ("section-a", "verified", "[]"),
+                ("section-b", "verified", "[]"),
+                ("section-old", "verified", "[]"),
+                ("section-policy", "verified", "[]"),
+            ),
+        )
+        connection.execute("INSERT INTO metadata VALUES ('schema_version', '2')")
         connection.commit()
     finally:
         connection.close()
@@ -272,7 +300,30 @@ def test_course_and_module_resolution_respects_program_and_cohort(tmp_path: Path
         assert repository.modules_in_text("共同模块要求", "program-a") == (module,)
     finally:
         repository.close()
+def test_repository_rejects_specific_policy_when_request_scope_is_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = _repository(tmp_path)
+    try:
+        base = dict(repository.retrieval_documents()[0])
+        specific = {
+            **base,
+            "cohort": "2024",
+            "college_id": "学院甲",
+            "program_ids": ("program-a",),
+        }
+        monkeypatch.setattr(repository, "retrieval_documents", lambda: (specific,))
 
+        assert repository.scoped_policy_documents() == ()
+        assert repository.scoped_policy_documents(cohort=2024) == ()
+        exact = repository.scoped_policy_documents(
+            cohort=2024,
+            program_ids=("program-a",),
+        )
+        assert {item["chunk_id"] for item in exact} == {"section-policy"}
+    finally:
+        repository.close()
 
 def test_college_scope_and_retrieval_provider_are_data_driven(tmp_path: Path) -> None:
     repository = _repository(tmp_path)
@@ -285,11 +336,15 @@ def test_college_scope_and_retrieval_provider_are_data_driven(tmp_path: Path) ->
             "file_url", "review_status", "college_id", "cohort", "authority_level",
             "effective_from", "effective_to", "status", "supersedes_source_id",
         }
-        assert required.issubset(documents["section-a"])
-        assert documents["section-a"]["review_status"] == "verified"
-        assert documents["section-a"]["program_ids"] == ("program-a",)
+        assert set(documents) == {"section-policy"}
+        assert required.issubset(documents["section-policy"])
+        assert documents["section-policy"]["doc_type"] == "policy"
+        assert documents["section-policy"]["topics"] == ("transfer",)
         assert "program_ids" not in documents["section-policy"]
+        assert {
+            item["chunk_id"] for item in repository.scoped_policy_documents()
+        } == {"section-policy"}
         scoped = repository.scoped_policy_documents(cohort=2024, program_ids=("program-a",))
-        assert {item["chunk_id"] for item in scoped} == {"section-a", "section-policy"}
+        assert {item["chunk_id"] for item in scoped} == {"section-policy"}
     finally:
         repository.close()

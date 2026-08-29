@@ -62,7 +62,9 @@ def test_unscoped_course_name_clarifies_instead_of_searching_policy(canonical_ru
     assert state.normalized_query is not None
     assert state.normalized_query.intent == "course_detail"
     assert set(state.normalized_query.missing_fields) == {"cohort", "program"}
-    assert state.plan is None
+    assert state.plan is not None
+    assert state.plan.operations == ()
+    assert state.plan.output_contract[0].status == "missing_data"
     assert answer.clarification
     assert not answer.refused
 
@@ -86,6 +88,59 @@ def test_three_operation_sql_rag_composite_plan(canonical_runtime) -> None:
     assert "学生申请转专业应提交材料" in answer.answer_md
 
 
+def test_two_output_course_and_policy_request_has_no_missing_course_capability(
+    canonical_runtime,
+) -> None:
+    answer, state = canonical_runtime.ask(
+        "2024级测试专业X有哪些课程，并解释转专业政策？"
+    )
+
+    assert state.plan is not None
+    assert [operation.type for operation in state.plan.operations] == [
+        "list_courses",
+        "retrieve_policy",
+    ]
+    assert {item.output for item in state.plan.output_contract} == {
+        "course_list",
+        "policy_explanation",
+    }
+    assert not answer.refused
+    assert "TST101" in answer.answer_md
+    assert "学生申请转专业应提交材料" in answer.answer_md
+
+
+def test_actual_offerings_and_policy_returns_only_the_safe_policy_section(
+    canonical_runtime,
+) -> None:
+    answer, state = canonical_runtime.ask(
+        "2024级X专业选课系统实际有哪些课程，并解释转专业政策？"
+    )
+
+    assert state.plan is not None
+    assert [operation.type for operation in state.plan.operations] == ["retrieve_policy"]
+    assert [(item.output, item.status) for item in state.output_contracts] == [
+        ("course_list", "unsupported"),
+        ("policy_explanation", "fulfilled"),
+    ]
+    assert not answer.refused
+    assert "学生申请转专业应提交材料" in answer.answer_md
+    assert "测试算法" not in answer.answer_md
+    assert "未完成的输出" in answer.answer_md
+
+
+def test_actual_offerings_request_clarifies_without_curriculum_tool(canonical_runtime) -> None:
+    answer, state = canonical_runtime.ask("2024级X专业选课系统实际开哪些课程？")
+
+    assert state.normalized_query is not None
+    assert state.normalized_query.information_scope == "actual_offerings"
+    assert state.plan is not None
+    assert state.plan.operations == ()
+    assert state.plan.output_contract
+    assert all(item.status == "unsupported" for item in state.plan.output_contract)
+    assert answer.clarification
+    assert "测试算法" not in answer.answer_md
+
+
 def test_composite_policy_question_rewrites_exemption_as_a_condition_query() -> None:
     assert (
         _policy_question(
@@ -94,6 +149,14 @@ def test_composite_policy_question_rewrites_exemption_as_a_condition_query() -> 
         )
         == "大学英语达到什么条件可以免修"
     )
+
+
+def test_deterministic_policy_understanding_emits_controlled_topics() -> None:
+    from query.understanding import deterministic_understanding
+
+    draft = deterministic_understanding("大学英语免修和转专业政策有什么规定？")
+
+    assert draft.policy_topics == ("转专业", "免修")
 
 
 def test_registry_exhaustively_covers_planner_operation_types(canonical_runtime) -> None:
@@ -155,6 +218,51 @@ def test_chinese_stage_terms_are_parsed_without_entity_hardcoding() -> None:
 
     deadline = deterministic_understanding("我能在大四前修完并毕业吗？")
     assert deadline.deadline_semester == 7
+
+
+def test_completed_course_code_adjacent_to_chinese_drives_progress_audit(canonical_runtime) -> None:
+    """``已修TST101`` must be a completed course, not an unparsed token."""
+
+    answer, state = canonical_runtime.ask(
+        "2024级测试专业X已修完TST101，专业选修还差多少学分？"
+    )
+
+    assert state.normalized_query is not None
+    assert state.normalized_query.intent == "progress_audit"
+    assert state.normalized_query.requested_outputs == ("progress_audit",)
+    assert state.normalized_query.completed_course_ids == ("course_549ef94de4225e2fafd5",)
+    assert state.plan is not None
+    assert [operation.type for operation in state.plan.operations] == [
+        "get_graduation_requirements",
+        "audit_completed_courses",
+    ]
+    assert not answer.refused
+    assert "专业选修课" in answer.answer_md
+    assert "尚差 0 学分" in answer.answer_md
+
+
+def test_completed_course_code_and_graduation_phrase_build_feasibility_dag(canonical_runtime) -> None:
+    answer, state = canonical_runtime.ask(
+        "2024级测试专业X已修TST101，能在第1学期前修完并毕业吗？"
+    )
+
+    assert state.normalized_query is not None
+    assert state.normalized_query.intent == "curriculum_feasibility"
+    assert state.normalized_query.requested_outputs == ("feasibility",)
+    assert state.normalized_query.completed_course_ids == ("course_549ef94de4225e2fafd5",)
+    assert state.plan is not None
+    assert [operation.type for operation in state.plan.operations] == [
+        "get_graduation_requirements",
+        "list_courses",
+        "audit_completed_courses",
+        "list_courses_before_semester",
+        "list_unavoidable_courses",
+        "check_curriculum_feasibility",
+    ]
+    assert state.plan.operations[-1].args.completed_course_ids == (
+        "course_549ef94de4225e2fafd5",
+    )
+    assert not answer.refused
 
 
 def test_mcp_validates_and_executes_typed_arguments(canonical_runtime) -> None:

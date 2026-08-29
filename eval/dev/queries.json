@@ -1,71 +1,230 @@
 [
   {
     "id": "dev-readme-single-course",
+    "dataset_kind": "test_fixture",
+    "dataset_version": "fixture-1",
     "intent": "course_detail",
     "question": "2024级测试专业X（TST101）是多少学分？",
-    "expected_tools": ["get_course_detail"],
+    "expected_operations": [
+      {
+        "type": "get_course_detail",
+        "args": {
+          "cohort": 2024,
+          "program_id": "program_a1c3db467d6ab3986780",
+          "course_id": "course_549ef94de4225e2fafd5",
+          "course_code": "TST101"
+        },
+        "depends_on": []
+      }
+    ],
     "expected_answer_contains": ["测试算法", "TST101", "3 学分"],
     "expected_safe_rejection": false
   },
   {
     "id": "dev-course-list",
+    "dataset_kind": "test_fixture",
+    "dataset_version": "fixture-1",
     "intent": "course_query",
     "question": "2024级测试专业X第1学期有哪些选修课？",
-    "expected_tools": ["list_courses"],
+    "expected_operations": [
+      {
+        "type": "list_courses",
+        "args": {
+          "cohort": 2024,
+          "program_id": "program_a1c3db467d6ab3986780",
+          "semesters": [1],
+          "course_natures": ["elective"],
+          "module_ids": [],
+          "course_ids": []
+        },
+        "depends_on": []
+      }
+    ],
     "expected_answer_contains": ["测试算法", "TST101"],
     "expected_safe_rejection": false
   },
   {
     "id": "dev-module-credits",
+    "dataset_kind": "test_fixture",
+    "dataset_version": "fixture-1",
     "intent": "module_requirements",
     "question": "2024级测试专业X专业选修课最低要修多少学分？",
-    "expected_tools": ["get_module_requirements"],
+    "expected_operations": [
+      {
+        "type": "get_module_requirements",
+        "args": {
+          "cohort": 2024,
+          "program_id": "program_a1c3db467d6ab3986780",
+          "module_ids": ["module_f71d87671032028cdd4f"]
+        },
+        "depends_on": []
+      }
+    ],
     "expected_answer_contains": ["专业选修课", "3 学分"],
     "expected_safe_rejection": false
   },
   {
     "id": "dev-policy",
+    "dataset_kind": "test_fixture",
+    "dataset_version": "fixture-1",
     "intent": "policy",
     "question": "测试学院转专业有什么规定？",
-    "expected_tools": ["retrieve_policy"],
+    "expected_operations": [
+      {
+        "type": "retrieve_policy",
+        "args": {
+          "question": "测试学院转专业有什么规定",
+          "cohort": null,
+          "program_ids": [],
+          "college_ids": [],
+          "as_of": null,
+          "topics": ["转专业"],
+          "top_k": 8
+        },
+        "depends_on": []
+      }
+    ],
     "expected_answer_contains": ["学生申请转专业应提交材料"],
     "expected_safe_rejection": false
   },
   {
     "id": "dev-audit",
+    "dataset_kind": "test_fixture",
+    "dataset_version": "fixture-1",
     "intent": "progress_audit",
     "question": "2024级测试专业X已修完TST101，专业选修还差多少学分？",
-    "expected_tools": ["get_graduation_requirements", "audit_completed_courses"],
+    "expected_operations": [
+      {
+        "type": "get_graduation_requirements",
+        "args": {
+          "cohort": 2024,
+          "program_id": "program_a1c3db467d6ab3986780"
+        },
+        "depends_on": []
+      },
+      {
+        "type": "audit_completed_courses",
+        "args": {
+          "cohort": 2024,
+          "program_id": "program_a1c3db467d6ab3986780",
+          "completed_course_ids": ["course_549ef94de4225e2fafd5"],
+          "completed_course_codes": []
+        },
+        "depends_on": ["get_graduation_requirements"]
+      }
+    ],
     "expected_answer_contains": ["专业选修课", "尚差 0 学分"],
     "expected_safe_rejection": false
   },
   {
     "id": "dev-feasibility",
-    "intent": "course_planning",
+    "dataset_kind": "test_fixture",
+    "dataset_version": "fixture-1",
+    "intent": "curriculum_feasibility",
     "question": "2024级测试专业X已修TST101，能在第1学期前修完并毕业吗？",
-    "expected_tools": [
-      "get_graduation_requirements",
-      "audit_completed_courses",
-      "list_courses_before_semester",
-      "list_unavoidable_courses",
-      "check_curriculum_feasibility",
-      "list_courses"
+    "expected_operations": [
+      {
+        "type": "get_graduation_requirements",
+        "args": {
+          "cohort": 2024,
+          "program_id": "program_a1c3db467d6ab3986780"
+        },
+        "depends_on": []
+      },
+      {
+        "type": "list_courses",
+        "args": {
+          "cohort": 2024,
+          "program_id": "program_a1c3db467d6ab3986780",
+          "semesters": [],
+          "course_natures": [],
+          "module_ids": [],
+          "course_ids": []
+        },
+        "depends_on": []
+      },
+      {
+        "type": "audit_completed_courses",
+        "args": {
+          "cohort": 2024,
+          "program_id": "program_a1c3db467d6ab3986780",
+          "completed_course_ids": ["course_549ef94de4225e2fafd5"],
+          "completed_course_codes": []
+        },
+        "depends_on": ["get_graduation_requirements", "list_courses"]
+      },
+      {
+        "type": "list_courses_before_semester",
+        "args": {
+          "cohort": 2024,
+          "program_id": "program_a1c3db467d6ab3986780",
+          "deadline_semester": 1,
+          "course_natures": []
+        },
+        "depends_on": ["list_courses", "audit_completed_courses"]
+      },
+      {
+        "type": "list_unavoidable_courses",
+        "args": {
+          "cohort": 2024,
+          "program_id": "program_a1c3db467d6ab3986780",
+          "after_semester": 1
+        },
+        "depends_on": ["list_courses", "audit_completed_courses"]
+      },
+      {
+        "type": "check_curriculum_feasibility",
+        "args": {
+          "cohort": 2024,
+          "program_id": "program_a1c3db467d6ab3986780",
+          "deadline_semester": 1,
+          "completed_course_ids": ["course_549ef94de4225e2fafd5"]
+        },
+        "depends_on": [
+          "audit_completed_courses",
+          "list_courses_before_semester",
+          "list_unavoidable_courses"
+        ]
+      }
     ],
+    "expected_answer_contains": [],
     "expected_safe_rejection": false
   },
   {
     "id": "dev-compare",
+    "dataset_kind": "test_fixture",
+    "dataset_version": "fixture-1",
     "intent": "compare_programs",
     "question": "2024级测试专业X和测试专业Y有什么区别？",
-    "expected_tools": ["compare_programs"],
+    "expected_operations": [
+      {
+        "type": "compare_programs",
+        "args": {
+          "cohort": 2024,
+          "program_ids": [
+            "program_a1c3db467d6ab3986780",
+            "program_ad38c408d444b839dec7"
+          ],
+          "dimensions": [
+            "graduation_min_credits",
+            "module_requirements",
+            "course_sets"
+          ]
+        },
+        "depends_on": []
+      }
+    ],
     "expected_answer_contains": ["测试专业X独有课程：TST101", "测试专业Y独有课程：TST201"],
     "expected_safe_rejection": false
   },
   {
     "id": "dev-out-of-corpus-rejection",
+    "dataset_kind": "test_fixture",
+    "dataset_version": "fixture-1",
     "intent": "general",
     "question": "火星大学量子魔法专业第1学期有哪些课？",
-    "expected_tools": [],
+    "expected_operations": [],
+    "expected_answer_contains": [],
     "expected_safe_rejection": true
   }
 ]

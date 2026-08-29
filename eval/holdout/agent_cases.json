@@ -1,0 +1,10 @@
+[
+  {
+    "id": "fixture-out-of-corpus",
+    "intent": "general",
+    "question": "你好",
+    "expected_operations": [],
+    "expected_answer_contains": [],
+    "expected_safe_rejection": true
+  }
+]

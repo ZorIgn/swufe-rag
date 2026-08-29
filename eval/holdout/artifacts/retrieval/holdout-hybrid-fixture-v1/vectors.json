@@ -1,0 +1,6 @@
+{
+  "holdout-policy-transfer-primary": [1.0, 0.0, 0.0, 0.0],
+  "holdout-policy-transfer-support": [0.9, 0.1, 0.0, 0.0],
+  "holdout-policy-english": [0.0, 1.0, 0.0, 0.0],
+  "holdout-policy-exam": [0.0, 0.0, 1.0, 0.0]
+}

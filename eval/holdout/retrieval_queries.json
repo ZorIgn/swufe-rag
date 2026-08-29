@@ -1,0 +1,47 @@
+[
+  {
+    "id": "fixture-transfer",
+    "question": "转专业资格和申请条件",
+    "relevance": {
+      "holdout-policy-transfer-primary": 3,
+      "holdout-policy-transfer-support": 1
+    },
+    "scope": {
+      "cohort": 2024,
+      "program_ids": [],
+      "college_ids": [],
+      "topics": ["转专业"],
+      "as_of": "2024-12-31"
+    },
+    "scope_label": "global-2024",
+    "hard_negative_chunk_ids": ["holdout-policy-english", "holdout-policy-exam"]
+  },
+  {
+    "id": "fixture-english",
+    "question": "英语免修条件",
+    "relevance": {"holdout-policy-english": 3},
+    "scope": {
+      "cohort": 2024,
+      "program_ids": [],
+      "college_ids": [],
+      "topics": ["免修"],
+      "as_of": "2024-12-31"
+    },
+    "scope_label": "global-2024",
+    "hard_negative_chunk_ids": ["holdout-policy-transfer-primary", "holdout-policy-exam"]
+  },
+  {
+    "id": "fixture-exam",
+    "question": "考试缓考规则",
+    "relevance": {"holdout-policy-exam": 3},
+    "scope": {
+      "cohort": 2024,
+      "program_ids": [],
+      "college_ids": [],
+      "topics": ["考试"],
+      "as_of": "2024-12-31"
+    },
+    "scope_label": "global-2024",
+    "hard_negative_chunk_ids": ["holdout-policy-transfer-primary", "holdout-policy-english"]
+  }
+]

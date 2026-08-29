@@ -1,0 +1,20 @@
+{
+  "转专业资格和申请条件": {
+    "holdout-policy-transfer-primary": 0.99,
+    "holdout-policy-transfer-support": 0.90,
+    "holdout-policy-english": 0.10,
+    "holdout-policy-exam": 0.10
+  },
+  "英语免修条件": {
+    "holdout-policy-english": 0.99,
+    "holdout-policy-transfer-primary": 0.10,
+    "holdout-policy-transfer-support": 0.10,
+    "holdout-policy-exam": 0.10
+  },
+  "考试缓考规则": {
+    "holdout-policy-exam": 0.99,
+    "holdout-policy-transfer-primary": 0.10,
+    "holdout-policy-transfer-support": 0.10,
+    "holdout-policy-english": 0.10
+  }
+}

@@ -1,20 +1,44 @@
 [
   {
+    "id": "dev-policy-transfer",
     "question": "转专业资格",
-    "relevant_chunk_id": "dev-policy-transfer",
-    "cohort": 2024,
-    "as_of": "2024"
+    "relevance": {"dev-policy-transfer": 3},
+    "scope": {
+      "cohort": 2024,
+      "program_ids": [],
+      "college_ids": [],
+      "topics": ["转专业"],
+      "as_of": "2024"
+    },
+    "scope_label": "global-2024",
+    "hard_negative_chunk_ids": ["dev-policy-english", "dev-policy-exam"]
   },
   {
+    "id": "dev-policy-english",
     "question": "英语免修",
-    "relevant_chunk_id": "dev-policy-english",
-    "cohort": 2024,
-    "as_of": "2024"
+    "relevance": {"dev-policy-english": 3},
+    "scope": {
+      "cohort": 2024,
+      "program_ids": [],
+      "college_ids": [],
+      "topics": ["免修"],
+      "as_of": "2024"
+    },
+    "scope_label": "global-2024",
+    "hard_negative_chunk_ids": ["dev-policy-transfer", "dev-policy-exam"]
   },
   {
+    "id": "dev-policy-exam",
     "question": "考试缓考",
-    "relevant_chunk_id": "dev-policy-exam",
-    "cohort": 2024,
-    "as_of": "2024"
+    "relevance": {"dev-policy-exam": 3},
+    "scope": {
+      "cohort": 2024,
+      "program_ids": [],
+      "college_ids": [],
+      "topics": ["考试"],
+      "as_of": "2024"
+    },
+    "scope_label": "global-2024",
+    "hard_negative_chunk_ids": ["dev-policy-transfer", "dev-policy-english"]
   }
 ]

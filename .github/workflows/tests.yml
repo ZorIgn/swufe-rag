@@ -38,7 +38,8 @@ jobs:
         # fully type checked here.
         run: >-
           uv run --no-sync python -m mypy
-          agent academic app evidence query generation retrieval storage eval
+          agent academic app evidence generation ingest query retrieval storage
+          scripts eval
       - name: Compile canonical sources
         run: >-
           uv run --no-sync python -m compileall -q
@@ -56,6 +57,7 @@ jobs:
           --evidence-review tests/canonical/data/evidence_review.csv
           --manifest-dir "$RUNNER_TEMP/manifests"
           --retrieval-root "$RUNNER_TEMP/retrieval"
+          --release-root "$RUNNER_TEMP/releases"
           --retrieval-mode lexical
       - name: Verify CI data fixture
         run: uv run --no-sync python -m scripts.verify_dataset --database "$RUNNER_TEMP/academic.sqlite3"
@@ -78,12 +80,26 @@ jobs:
         run: >-
           uv run --no-sync python -m eval.run_agent_eval
           --database "$RUNNER_TEMP/academic.sqlite3"
-          --questions eval/dev/queries.json
+          --questions eval/holdout/agent_cases.json
+          --holdout-manifest eval/holdout/manifest.json
+          --allow-test-fixture-dataset-mismatch
           --output "$RUNNER_TEMP/agent-eval.json"
+      - name: Frozen lexical and artifact-backed hybrid evaluation
+        run: >-
+          uv run --no-sync python -m eval.run_retrieval_ablation
+          --documents eval/holdout/retrieval_documents.jsonl
+          --queries eval/holdout/retrieval_queries.json
+          --holdout-manifest eval/holdout/manifest.json
+          --variants lexical hybrid
+          --hybrid-artifact-root eval/holdout/artifacts/retrieval
+          --dataset-version holdout-hybrid-fixture-v1
+          --output "$RUNNER_TEMP/retrieval-ablation.json"
       - name: Generalization smoke
         run: >-
           uv run --no-sync python -m eval.run_generalization
           --database "$RUNNER_TEMP/academic.sqlite3" --samples 2
+      - name: Synthetic end-to-end demo
+        run: uv run --no-sync python -m scripts.run_demo --json
       - name: Unit and contract tests
         env:
           PYTHONUTF8: "1"
@@ -92,7 +108,8 @@ jobs:
         run: >-
           uv run --no-sync python -m pytest -q tests/canonical
           --cov=agent --cov=academic --cov=query --cov=evidence
-          --cov=generation --cov=app --cov-fail-under=50
+          --cov=generation --cov=app --cov=ingest --cov=retrieval
+          --cov=storage --cov=eval --cov-fail-under=50
   docker:
     runs-on: ubuntu-latest
     steps:

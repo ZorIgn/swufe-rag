@@ -1,0 +1,33 @@
+{
+  "holdout_contract_version": "2",
+  "kind": "test_fixture",
+  "holdout_id": "public-ci-fixture-v1",
+  "dataset_version": "holdout-hybrid-fixture-v1",
+  "access": "public",
+  "bundle_sha256": "13af8879323e1fc7b4a7c4015668721cc89cd3901860f56f2d57249387fd0752",
+  "inputs": {
+    "agent_cases": {
+      "path": "agent_cases.json",
+      "sha256": "43160e67b63fa0094ef8469639913615668dc2a23cc1a3c5267f387e7d0d6983",
+      "count": 1
+    },
+    "retrieval_documents": {
+      "path": "retrieval_documents.jsonl",
+      "sha256": "9e2eb62d1d26997a58abb0a49f19eb7e4900a0773a3ccfaa560696067f8fa08a",
+      "count": 4
+    },
+    "retrieval_queries": {
+      "path": "retrieval_queries.json",
+      "sha256": "bee1394e512759a009bfa05924dede16656e2318f93155fde879fc57f8dec2d6",
+      "count": 3
+    }
+  },
+  "additional_files": {
+    "artifacts/retrieval/holdout-hybrid-fixture-v1/documents.jsonl": "9e2eb62d1d26997a58abb0a49f19eb7e4900a0773a3ccfaa560696067f8fa08a",
+    "artifacts/retrieval/holdout-hybrid-fixture-v1/doc_ids.json": "b962eab8b4be37a44f8ff3efda6782dfe9ad2fba2799af5d91be20750509b713",
+    "artifacts/retrieval/holdout-hybrid-fixture-v1/vectors.json": "ead9b40ef78ce4b2c80f396d957e1575cb46121e34edc4a5dd7c3867195f7313",
+    "artifacts/retrieval/holdout-hybrid-fixture-v1/query_vectors.json": "39bfe5f3bb676fa054b0ef6063cd5879981412dcdbb148cd3f269cec2adf047f",
+    "artifacts/retrieval/holdout-hybrid-fixture-v1/reranker_scores.json": "4700e95e103d8d0bc2ec61dcfaf69cb502ea2b255a0dba0b18876cd516acf474",
+    "artifacts/retrieval/holdout-hybrid-fixture-v1/retrieval_manifest.json": "11a511633ee7424e9b8c8a56ba8eaad6394e531498e5f086e7f645d306c86d38"
+  }
+}

@@ -8,26 +8,33 @@ from pathlib import Path
 
 import pytest
 
-from academic.database import build_database
+from academic.database import AcademicRepository, build_database
 from agent.factory import build_runtime
 from ingest.contracts import validate_chunk
 from ingest.models import DocumentElement, ParsedDocument
 from ingest.pipeline import ingest_sources
+from ingest.sources import SOURCE_FIELDS
 from scripts import build_all, verify_dataset
 
 FIXTURE_DATA = Path(__file__).with_name("data")
-SOURCE_FIELDS = (
-    "file",
-    "doc_title",
-    "level",
-    "college",
-    "cohort",
-    "year",
-    "status",
-    "page_url",
-    "file_url",
-    "collected_at",
-)
+CURRICULUM_SHA = "c" * 64
+POLICY_SHA = "d" * 64
+
+
+def _field_verification(
+    *, source_sha256: str, chunk_id: str, page: int, row: int, cell: str, span: str
+) -> dict[str, object]:
+    return {
+        "verification_status": "verified",
+        "lineage": {
+            "source_sha256": source_sha256,
+            "chunk_id": chunk_id,
+            "page": page,
+            "row": row,
+            "cell": cell,
+            "span": span,
+        },
+    }
 
 
 def _source_row() -> dict[str, str]:
@@ -42,6 +49,10 @@ def _source_row() -> dict[str, str]:
         "page_url": "https://example.test/fixture-source.pdf#page=1",
         "file_url": "https://example.test/fixture-source.pdf",
         "collected_at": "2026-01-01",
+        "doc_type": "curriculum",
+        "topics": "",
+        "source_sha256": CURRICULUM_SHA,
+        "authenticity_status": "verified",
     }
 
 
@@ -59,6 +70,25 @@ def _build_dataset(
         writer = csv.DictWriter(handle, fieldnames=SOURCE_FIELDS)
         writer.writeheader()
         writer.writerow(_source_row())
+        if add_unreferenced_chunk:
+            writer.writerow(
+                {
+                    "file": "policy-source.pdf",
+                    "doc_title": "可信状态测试政策",
+                    "level": "校级",
+                    "college": "全校",
+                    "cohort": "不限",
+                    "year": "2024",
+                    "status": "现行",
+                    "page_url": "https://example.test/policy-source.pdf#page=1",
+                    "file_url": "https://example.test/policy-source.pdf",
+                    "collected_at": "2026-01-01",
+                    "doc_type": "policy",
+                    "topics": "transfer",
+                    "source_sha256": POLICY_SHA,
+                    "authenticity_status": "verified",
+                }
+            )
 
     chunks = [
         {
@@ -69,18 +99,26 @@ def _build_dataset(
             "cohort": "2024",
             "is_table": False,
             "review_status": chunk_review_status,
+            "doc_type": "curriculum",
+            "topics": [],
+            "source_sha256": CURRICULUM_SHA,
+            "extraction_quality": "verified",
         }
     ]
     if add_unreferenced_chunk:
         chunks.append(
             {
                 "chunk_id": "policy-only-evidence",
-                "text": "这是未关联结构化课程或要求的政策正文。",
-                "doc_title": "可信状态测试培养方案",
+                "text": "这是未关联结构化课程或要求的政策正文，适用于转专业申请。",
+                "doc_title": "可信状态测试政策",
                 "article": "政策正文 / 原文件第2页",
-                "cohort": "2024",
+                "cohort": "不限",
                 "is_table": False,
                 "review_status": chunk_review_status,
+                "doc_type": "policy",
+                "topics": ["transfer"],
+                "source_sha256": POLICY_SHA,
+                "extraction_quality": "verified",
             }
         )
     chunks_path = tmp_path / "chunks.jsonl"
@@ -107,6 +145,24 @@ def _build_dataset(
                             "chunk_id": "curriculum-evidence",
                             "article": "原文件第1页",
                         },
+                        "field_verification": {
+                            "module": _field_verification(
+                                source_sha256=CURRICULUM_SHA,
+                                chunk_id="curriculum-evidence",
+                                page=1,
+                                row=1,
+                                cell="A1",
+                                span="专业选修课",
+                            ),
+                            "required_credits": _field_verification(
+                                source_sha256=CURRICULUM_SHA,
+                                chunk_id="curriculum-evidence",
+                                page=1,
+                                row=1,
+                                cell="B1",
+                                span="最低要求为 3 学分",
+                            ),
+                        },
                     }
                 ],
             }
@@ -127,6 +183,40 @@ def _build_dataset(
                 "page": 1,
                 "source_row": 1,
                 "evidence": {"chunk_id": "curriculum-evidence"},
+                "field_verification": {
+                    "module": _field_verification(
+                        source_sha256=CURRICULUM_SHA,
+                        chunk_id="curriculum-evidence",
+                        page=1,
+                        row=2,
+                        cell="A2",
+                        span="专业选修课",
+                    ),
+                    "credits": _field_verification(
+                        source_sha256=CURRICULUM_SHA,
+                        chunk_id="curriculum-evidence",
+                        page=1,
+                        row=2,
+                        cell="B2",
+                        span="3 学分",
+                    ),
+                    "semester": _field_verification(
+                        source_sha256=CURRICULUM_SHA,
+                        chunk_id="curriculum-evidence",
+                        page=1,
+                        row=2,
+                        cell="C2",
+                        span="第 1 学期开设",
+                    ),
+                    "nature": _field_verification(
+                        source_sha256=CURRICULUM_SHA,
+                        chunk_id="curriculum-evidence",
+                        page=1,
+                        row=2,
+                        cell="D2",
+                        span="选修",
+                    ),
+                },
             }
         ],
     }
@@ -164,6 +254,17 @@ def _build_dataset(
                     "reviewed_at": "2026-01-01T00:00:00+00:00",
                 }
             )
+            if add_unreferenced_chunk and evidence_decision is None:
+                writer.writerow(
+                    {
+                        "original_title": "policy-source.pdf",
+                        "corrected_title": "可信状态测试政策",
+                        "decision": ledger_decision,
+                        "reviewer": "test-reviewer",
+                        "method": "manual",
+                        "reviewed_at": "2026-01-01T00:00:00+00:00",
+                    }
+                )
 
     evidence_review_path: Path | None = None
     if evidence_decision is not None:
@@ -226,6 +327,7 @@ def test_build_all_cli_consumes_explicit_review_ledgers(
     database = tmp_path / "academic.sqlite3"
     manifest_dir = tmp_path / "manifests"
     retrieval_root = tmp_path / "retrieval"
+    release_root = tmp_path / "releases"
     monkeypatch.setattr(
         sys,
         "argv",
@@ -249,6 +351,8 @@ def test_build_all_cli_consumes_explicit_review_ledgers(
             str(manifest_dir),
             "--retrieval-root",
             str(retrieval_root),
+            "--release-root",
+            str(release_root),
             "--retrieval-mode",
             "lexical",
         ],
@@ -337,6 +441,7 @@ def test_evidence_review_ledger_promotes_only_the_named_chunk(
     database = _build_dataset(
         tmp_path,
         chunk_review_status="unverified",
+        ledger_decision="include",
         evidence_decision=decision,
         add_unreferenced_chunk=True,
     )
@@ -390,7 +495,7 @@ def test_runtime_readiness_requires_verified_core_business_evidence(
     try:
         ready, reasons = structured_only.readiness()
         assert not ready
-        assert reasons == ("verified_policy_evidence_missing",)
+        assert "verified_policy_evidence_missing" in reasons
     finally:
         structured_only.repository.close()
 
@@ -404,6 +509,35 @@ def test_runtime_readiness_requires_verified_core_business_evidence(
     finally:
         reviewed.repository.close()
 
+
+
+def test_readiness_requires_every_active_program_to_be_answerable(
+    tmp_path: Path,
+) -> None:
+    database = _build_dataset(
+        tmp_path,
+        ledger_decision="include",
+        add_unreferenced_chunk=True,
+    )
+    with sqlite3.connect(database) as connection:
+        source_id = connection.execute(
+            "SELECT source_id FROM sources WHERE status='现行' ORDER BY source_id LIMIT 1"
+        ).fetchone()[0]
+        connection.execute(
+            "INSERT INTO programs VALUES (?, ?, ?, ?, ?)",
+            ("program-incomplete", "未完成专业", "测试学院", 2024, source_id),
+        )
+
+    repository = AcademicRepository(database)
+    try:
+        ready, reasons = repository.evidence_readiness()
+    finally:
+        repository.close()
+
+    assert not ready
+    assert "program_readiness_incomplete" in reasons
+    assert "program_unanswerable:program-incomplete" in reasons
+    assert "core_business_unanswerable" not in reasons
 
 def test_dataset_verifier_allows_only_explicit_review_required_provenance(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

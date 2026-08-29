@@ -4,6 +4,7 @@ import json
 
 from fastapi.testclient import TestClient
 
+from agent.policies import Principal
 from agent.provider import ProviderError, RequestModelFactory
 from app.server.canonical import create_app
 
@@ -13,11 +14,16 @@ def test_public_endpoints_share_one_runtime(canonical_runtime) -> None:
     assert client.get("/health/live").status_code == 200
     assert client.get("/health/ready").status_code == 200
     result = client.post(
-        "/ask", json={"question": "2024级X专业第1学期有哪些选修课？", "debug": True}
+        "/ask", json={"question": "2024级X专业第1学期有哪些选修课？"}
     )
     assert result.status_code == 200
     payload = result.json()
-    assert payload["debug"]["tool_calls"] == ["academic.list_courses"]
+    assert "debug" not in payload
+    denied_debug = client.post(
+        "/ask", json={"question": "2024级X专业第1学期有哪些选修课？", "debug": True}
+    )
+    assert denied_debug.status_code == 403
+    assert denied_debug.json()["error_code"] == "debug_not_allowed"
     source = client.get("/source/test-plan-1")
     assert source.status_code == 200
     assert "local_path" not in source.text
@@ -90,6 +96,21 @@ class _RecordingModel:
                         "evidence_ids": sorted(
                             {identifier for fact in selected for identifier in fact["evidence_ids"]}
                         ),
+                        "atoms": [
+                            {
+                                "subject": fact["subject"],
+                                "predicate": fact["predicate"],
+                                "value": fact["value"],
+                                "unit": fact["unit"],
+                                "conditions": fact["conditions"],
+                                "exceptions": fact["exceptions"],
+                                "scope": fact["scope"],
+                                "temporal": fact["temporal"],
+                                "fact_ids": [fact["fact_id"]],
+                                "evidence_ids": fact["evidence_ids"],
+                            }
+                            for fact in selected
+                        ],
                     }
                 ]
             },
@@ -105,7 +126,13 @@ def test_byok_model_is_request_scoped_and_never_stored(canonical_runtime) -> Non
         received.append(api_key)
         return model
 
-    client = TestClient(create_app(canonical_runtime, request_model_factory=factory))
+    client = TestClient(
+        create_app(
+            canonical_runtime,
+            request_model_factory=factory,
+            principal_resolver=lambda _request: Principal(subject="byok-user"),
+        )
+    )
     response = client.post(
         "/ask",
         headers={"X-LLM-API-Key": "test-secret-key-123456"},
@@ -116,6 +143,8 @@ def test_byok_model_is_request_scoped_and_never_stored(canonical_runtime) -> Non
     assert response.json()["refused"] is False
     assert received == ["test-secret-key-123456"]
     assert model.calls == 2
-    session = canonical_runtime._deps.sessions._values["byok-test"][1]
-    assert "test-secret-key-123456" not in repr(session)
+    assert canonical_runtime._deps.sessions._values
+    assert "test-secret-key-123456" not in repr(
+        canonical_runtime._deps.sessions._values
+    )
     assert "test-secret-key-123456" not in repr(canonical_runtime._deps.tracer.spans)

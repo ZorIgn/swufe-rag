@@ -12,7 +12,11 @@
           "required_credits": 3,
           "listed_credits": 3,
           "rule_text": "最低3学分",
-          "evidence": {"chunk_id": "fixture-plan-1", "article": "原文件第1页"}
+          "evidence": {"chunk_id": "fixture-plan-1", "article": "原文件第1页"},
+          "field_verification": {
+            "module": {"verification_status": "verified", "lineage": {"source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "chunk_id": "fixture-plan-1", "page": 1, "row": 1, "cell": "A1", "span": "专业选修课"}},
+            "required_credits": {"verification_status": "verified", "lineage": {"source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "chunk_id": "fixture-plan-1", "page": 1, "row": 1, "cell": "B1", "span": "最低要求为 3 学分"}}
+          }
         }
       ]
     },
@@ -27,7 +31,11 @@
           "required_credits": 4,
           "listed_credits": 4,
           "rule_text": "最低4学分",
-          "evidence": {"chunk_id": "fixture-plan-2", "article": "原文件第2页"}
+          "evidence": {"chunk_id": "fixture-plan-2", "article": "原文件第2页"},
+          "field_verification": {
+            "module": {"verification_status": "verified", "lineage": {"source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "chunk_id": "fixture-plan-2", "page": 2, "row": 1, "cell": "A1", "span": "专业选修课"}},
+            "required_credits": {"verification_status": "verified", "lineage": {"source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "chunk_id": "fixture-plan-2", "page": 2, "row": 1, "cell": "B1", "span": "最低要求为 4 学分"}}
+          }
         }
       ]
     }
@@ -47,7 +55,13 @@
       "source_title": "Canonical CI curriculum fixture",
       "page": 1,
       "source_row": 1,
-      "evidence": {"chunk_id": "fixture-plan-1"}
+      "evidence": {"chunk_id": "fixture-plan-1"},
+      "field_verification": {
+        "module": {"verification_status": "verified", "lineage": {"source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "chunk_id": "fixture-plan-1", "page": 1, "row": 2, "cell": "A2", "span": "专业选修课"}},
+        "credits": {"verification_status": "verified", "lineage": {"source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "chunk_id": "fixture-plan-1", "page": 1, "row": 2, "cell": "B2", "span": "3学分"}},
+        "semester": {"verification_status": "verified", "lineage": {"source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "chunk_id": "fixture-plan-1", "page": 1, "row": 2, "cell": "C2", "span": "第1学期开设"}},
+        "nature": {"verification_status": "verified", "lineage": {"source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "chunk_id": "fixture-plan-1", "page": 1, "row": 2, "cell": "D2", "span": "选修"}}
+      }
     },
     {
       "code": "TST201",
@@ -63,7 +77,13 @@
       "source_title": "Canonical CI curriculum fixture",
       "page": 2,
       "source_row": 1,
-      "evidence": {"chunk_id": "fixture-plan-2"}
+      "evidence": {"chunk_id": "fixture-plan-2"},
+      "field_verification": {
+        "module": {"verification_status": "verified", "lineage": {"source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "chunk_id": "fixture-plan-2", "page": 2, "row": 2, "cell": "A2", "span": "专业选修课"}},
+        "credits": {"verification_status": "verified", "lineage": {"source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "chunk_id": "fixture-plan-2", "page": 2, "row": 2, "cell": "B2", "span": "4学分"}},
+        "semester": {"verification_status": "verified", "lineage": {"source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "chunk_id": "fixture-plan-2", "page": 2, "row": 2, "cell": "C2", "span": "第1学期开设"}},
+        "nature": {"verification_status": "verified", "lineage": {"source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "chunk_id": "fixture-plan-2", "page": 2, "row": 2, "cell": "D2", "span": "选修"}}
+      }
     }
   ]
 }

@@ -9,6 +9,7 @@ from pathlib import Path
 from academic.database import SCHEMA, AcademicRepository, build_database
 from academic.tools import AcademicTools
 from evidence.models import (
+    ClaimAtom,
     ClaimSpan,
     ClaimValidation,
     DerivedFact,
@@ -38,7 +39,7 @@ def _insert_source(
             source_id,
             title,
             "校级",
-            "test-college",
+            "校级",
             "2024",
             2,
             effective_from,
@@ -51,6 +52,14 @@ def _insert_source(
             "source-hash",
             "2026-01-01",
         ),
+    )
+    connection.execute(
+        "INSERT INTO source_taxonomy VALUES (?, ?, ?)",
+        (source_id, "policy", "[]"),
+    )
+    connection.execute(
+        "INSERT INTO source_authenticity VALUES (?, ?, ?, ?, ?)",
+        (source_id, "source-hash", "source-hash", "verified", "approved"),
     )
 
 
@@ -77,6 +86,10 @@ def _insert_section(
             1.0,
             "verified",
         ),
+    )
+    connection.execute(
+        "INSERT INTO section_extraction_quality VALUES (?, ?, ?)",
+        (chunk_id, "verified", "[]"),
     )
 
 
@@ -370,6 +383,15 @@ def test_derived_fact_inherits_evidence_from_recursive_inputs() -> None:
                 text="尚差 3 学分。",
                 fact_ids=(derived.fact_id,),
                 evidence_ids=(evidence.evidence_id,),
+                atoms=(
+                    ClaimAtom(
+                        subject="module",
+                        predicate="remaining_credits",
+                        value=3,
+                        fact_ids=(derived.fact_id,),
+                        evidence_ids=(evidence.evidence_id,),
+                    ),
+                ),
                 validation=ClaimValidation(claim_id="claim", passed=False),
             ),
         ),

@@ -1,0 +1,15 @@
+{
+  "dataset_version": "holdout-hybrid-fixture-v1",
+  "source_hash": "holdout-fixture-source",
+  "retrieval_mode": "hybrid",
+  "test_fixture": true,
+  "embedding_model": "deterministic-test-encoder",
+  "embedding_dimension": 4,
+  "reranker_model": "deterministic-test-reranker",
+  "chunk_count": 4,
+  "documents_sha256": "9e2eb62d1d26997a58abb0a49f19eb7e4900a0773a3ccfaa560696067f8fa08a",
+  "doc_ids_sha256": "b962eab8b4be37a44f8ff3efda6782dfe9ad2fba2799af5d91be20750509b713",
+  "vectors_sha256": "ead9b40ef78ce4b2c80f396d957e1575cb46121e34edc4a5dd7c3867195f7313",
+  "query_vectors_sha256": "39bfe5f3bb676fa054b0ef6063cd5879981412dcdbb148cd3f269cec2adf047f",
+  "reranker_scores_sha256": "4700e95e103d8d0bc2ec61dcfaf69cb502ea2b255a0dba0b18876cd516acf474"
+}

@@ -1,2 +1,3 @@
-file,doc_title,level,college,cohort,year,status,page_url,file_url,collected_at
-test.pdf,Canonical CI curriculum fixture,院级,测试学院,2024,2024,现行,https://example.test/plan.pdf#page=1,https://example.test/plan.pdf,2026-01-01
+file,doc_title,level,college,cohort,year,status,page_url,file_url,collected_at,doc_type,topics,source_sha256,authenticity_status
+test-curriculum.pdf,Canonical CI curriculum fixture,院级,测试学院,2024,2024,现行,https://example.test/plan.pdf#page=1,https://example.test/plan.pdf,2026-01-01,curriculum,,aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,verified
+test-policy.pdf,Canonical CI policy fixture,校级,全校,不限,2024,现行,https://example.test/policy.pdf#page=1,https://example.test/policy.pdf,2026-01-01,policy,转专业,bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,verified
