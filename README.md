@@ -1,117 +1,144 @@
-# SWUFE Academic RAG
+<div align="center">
 
+# 🎓 SWUFE 教务智能问答
+
+**证据可追溯的 SQL + RAG 教务知识系统**
+
+让课程、学分、培养要求与制度问答回到原文件、原页码和可复核证据。
+
+[![Python](https://img.shields.io/badge/Python-3.10--3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-API-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![SQLite](https://img.shields.io/badge/SQLite-structured%20facts-003B57?logo=sqlite&logoColor=white)](https://www.sqlite.org/)
+[![Retrieval](https://img.shields.io/badge/Retrieval-BM25%20%2B%20Dense-6C5CE7)](docs/RETRIEVAL.md)
 [![CI](https://github.com/ZorIgn/swufe-rag/actions/workflows/tests.yml/badge.svg)](https://github.com/ZorIgn/swufe-rag/actions/workflows/tests.yml)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-一个面向培养方案、课程规则和校务制度的证据约束型问答原型。项目的重点不是“让大模型记住学校资料”，而是把不同性质的问题放进不同的可信执行路径：
+[项目简介](#-项目简介) · [核心能力](#-核心能力) · [系统架构](#️-系统架构) · [快速开始](#-快速开始) · [HTTP API](#-http-api) · [数据构建](#-数据构建与发布) · [测试](#-测试与验证)
 
-- 课程、学分、学期和模块要求由参数化 SQLite 工具查询；
-- 制度解释先按届别、学院、专业、有效期和主题收窄范围，再执行 BM25 / dense 检索；
-- 每个事实保留字段级 lineage，每个回答声明绑定的 fact、comparator 和 evidence；
-- 缺范围、缺证据、来源冲突或语义绑定失败时，系统澄清或拒答，不生成貌似完整的答案。
+</div>
 
-仓库只包含合成测试夹具，不包含学校正式语料、受限评测集、学生数据或模型权重。因此，本项目可验证的是工程契约和失效保护，不是学校真实场景下的准确率、召回率、延迟或成本。
+---
 
-## 一分钟体验
+## 📖 项目简介
+
+**SWUFE 教务智能问答**面向西南财经大学培养方案、课程规则与校务制度查询，将结构化课程数据和非结构化制度文本组织到同一条证据链中。
+
+课程、学分、学期和模块要求通过类型化 SQLite 工具精确查询；培养目标、办事规则和制度条款通过作用域感知的混合检索获取上下文；学业规划类问题则组合两条路径，生成可回溯到事实、计算过程和来源页码的回答。
+
+| 信息类型 | 处理方式 | 典型问题 |
+| --- | --- | --- |
+| 课程、代码、学分、学期、性质 | 参数化 SQLite 工具 | “2024 级人工智能专业的离散数学多少学分？” |
+| 毕业要求、模块最低学分 | SQLite + DerivedFact | “专业选修模块还差多少学分？” |
+| 培养目标、制度条款、办事规则 | 作用域检索与 RAG | “大学英语达到什么条件可以免修？” |
+| 课程事实与制度解释的组合问题 | SQL + RAG | “修完这些课程后还需要满足哪些要求？” |
+
+仓库内置合成示例数据，可直接运行完整问答链路；业务资料、模型快照和评测数据通过版本化数据包接入。
+
+> 💡 一句话概括：**模型负责理解和表达，程序负责查询、计算、引用与校验。**
+
+## ✨ 核心能力
+
+- 🧭 **自然语言查询规划** —— 将问题归一化为届别、学院、专业、学期、课程性质、主题和时间等结构化条件，并生成带依赖关系的类型化执行计划。
+- 🗃️ **结构化事实查询** —— 课程、学分、培养模块和毕业要求通过预定义的只读 SQLite 工具查询，计算结果保留输入事实和推导过程。
+- 🔎 **作用域混合检索** —— 按届别、学院、专业、主题、生效时间和版本收窄资料，再使用 BM25、稠密向量、RRF、CrossEncoder 和 MMR 检索制度正文与表格脚注。
+- 🔗 **证据化回答** —— 结构化事实和检索片段统一进入 <code>EvidencePacket</code>，回答返回来源标题、证据片段、物理页码和引用定位。
+- ✅ **回答语义校验** —— 对事实主体、属性、数值、单位、条件、时间和比较关系进行绑定，检查“等于”“至少”“至多”等方向性语义。
+- 📋 **学业进度计算** —— 根据已修课程计算模块完成度、剩余学分与规则满足情况，并保留 <code>DerivedFact</code> 的输入事实和计算过程。
+- 📚 **数据摄取与审核** —— 解析 PDF / DOCX，保留页面、表格和字段位置，通过质量账本、来源登记和审核记录生成结构化目录。
+- 📦 **版本化数据发布** —— 使用内容寻址版本绑定 SQLite、检索产物、数据清单、模型摘要和代码来源，根据评测结果与签名证明完成版本晋级。
+- 🌐 **统一服务接口** —— FastAPI 提供问答、学业审计、来源查看和健康检查接口，支持请求级模型 Key、内存或 Redis 会话以及 Docker 部署。
+
+## 🏗️ 系统架构
+
+~~~mermaid
+flowchart LR
+    Q["用户问题"] --> U["Question Understanding"]
+    U --> N["实体归一化与作用域"]
+    N --> P["Typed DAG Planner"]
+
+    P --> T["Read-only ToolRegistry"]
+    T --> S[("SQLite<br/>课程与培养要求")]
+    T --> R["Scoped Policy Retrieval"]
+
+    R --> B["BM25"]
+    R --> D["Dense"]
+    B --> F["RRF Fusion"]
+    D --> F
+    F --> X["Reranker + MMR"]
+
+    S --> E["EvidencePacket"]
+    X --> E
+    E --> G["Answer Synthesizer"]
+    G --> V["Claim + Citation Validator"]
+    V --> A["答案 + 引用 + 原页定位"]
+~~~
+
+一次查询依次经过：
+
+1. **问题理解**：识别课程、培养要求、制度解释或学业规划意图。
+2. **实体归一化**：统一届别、专业、课程、学期和主题表达。
+3. **执行规划**：生成类型化操作及其依赖关系。
+4. **工具执行**：调用参数化 SQLite 工具或作用域检索服务。
+5. **证据汇总**：将事实、推导结果、检索片段和引用整理为 <code>EvidencePacket</code>。
+6. **回答生成**：基于证据组织自然语言答案。
+7. **结果校验**：核对事实、数值、单位、比较关系、操作覆盖与引用。
+
+## 🛠️ 技术栈
+
+| 领域 | 选型 |
+| --- | --- |
+| 服务端 | Python 3.10–3.12、FastAPI、Pydantic、Uvicorn |
+| 结构化知识 | SQLite、参数化查询、类型化只读工具 |
+| 检索 | BM25、稠密向量、RRF、CrossEncoder 重排序、MMR、FAISS 检索产物 |
+| Agent Runtime | 类型化状态、DAG 计划、ToolRegistry、覆盖检查与会话 |
+| 证据与生成 | EvidencePacket、Fact、DerivedFact、ClaimAtom、引用校验 |
+| 数据摄取 | PDF / DOCX、页面与表格质量账本、结构化目录物化 |
+| 发布 | SHA-256 内容寻址版本、Ed25519 评测签名 |
+| 模型接口 | OpenAI-compatible API、请求级 BYOK |
+| 会话 | 有界内存会话、可选 Redis |
+| 质量保障 | Pytest、pytest-cov、Ruff、mypy、GitHub Actions |
+| 部署 | Docker、Docker Compose |
+
+## 🚀 快速开始
 
 环境要求：Python 3.10–3.12 和 [uv](https://docs.astral.sh/uv/)。
 
+以下命令以 Windows PowerShell 为例。
+
+### 1. 安装
+
 ~~~powershell
+git clone https://github.com/ZorIgn/swufe-rag.git
+cd swufe-rag
 uv sync --locked --extra dev
+~~~
+
+### 2. 运行合成演示
+
+~~~powershell
 uv run python -m scripts.run_demo
 ~~~
 
-演示会在临时目录构建一份完全合成的 SQLite 数据库，并通过真实运行时执行三个场景：结构化培养要求、课程明细和对实时选课数据的边界拒答。它不下载模型、不调用外部 LLM，也不会写入仓库数据目录。机器可读输出：
+演示会创建一份合成培养方案数据库，依次查询模块最低学分、课程学分与学期，并展示带引用的回答。机器可读输出：
 
 ~~~powershell
 uv run python -m scripts.run_demo --json
 ~~~
 
-## 核心链路
+输出示例：
 
 ~~~text
-RawQuestion
-  -> UnderstandingDraft
-  -> NormalizedQuery + explicit scope
-  -> bounded typed ExecutionPlan
-  -> read-only SQL / scoped policy retrieval
-  -> EvidencePacket
-  -> ClaimAtom + comparator validation
-  -> cited FinalAnswer
+问题：2024级测试专业X的测试算法多少学分，在哪个学期开设？
+
+回答：测试算法（TST101）为 3 学分，在第 1 学期开设。
+      课程性质为选修，所属模块为专业选修课。
+
+来源：2024 级测试专业培养方案（合成示例），第 1 页
 ~~~
 
-运行时是一个有界状态机：最多执行一次针对缺失证据的定向修复，不执行模型生成的 SQL 或 Python。复合问题的每项输出都绑定到具体 producer operation；同类型工具的成功结果不能替另一项失败输出“凑齐覆盖”。
+### 3. 启动 HTTP 服务
 
-### 为什么不是纯向量 RAG
-
-| 问题类型 | 执行路径 | 原因 |
-| --- | --- | --- |
-| 课程、学分、模块、学期 | 参数化 SQLite 工具 | 需要精确过滤、关系约束和可验证数值 |
-| 培养进度、可行性 | 只读 DAG 工具 + DerivedFact | 需要显式依赖、差额和规则计算 |
-| 制度解释 | scope-aware BM25 / dense hybrid | 需要从正文中找解释，同时阻止跨届别、学院或版本污染 |
-| 实时开课、名额、成绩、毕业审核 | 明确不支持 | 仓库不接教务实时系统，不能用培养方案替代实时事实 |
-
-GraphRAG 不是当前问题的必要组件：仓库中的 Fact / DerivedFact 是回答证据图，不是把语料建成图数据库后执行图检索。若未来问题演化为跨文件、多跳实体关系推理，应先用真实查询集证明图检索的收益。
-
-## 已实现的工程边界
-
-### 数据可信
-
-- PDF 解析保留可获得的页码与表格；DOCX 保留文档顺序和表格但不猜测页码；chunk 绑定来源 SHA-256 与抽取质量，结构化字段另外保存 page / row / cell / span lineage；
-- 低质量页面或表格进入 warning / quarantine / review-required，不会被静默写成可信结构化事实；
-- catalog materialization 要求字段级来源、行列位置和审核状态；
-- reviewer ledger 是可验证输入记录，不代表仓库已经实现身份签名、双人复核或不可篡改审批系统。
-
-当前依赖不包含 OCR 引擎或复杂表格识别后端，因此不能把项目描述为“任意扫描 PDF 全自动入库”。
-
-### 检索可信
-
-- 候选集在排序前应用时间、版本、届别、学院、专业和主题 scope；
-- hybrid 合约包含 BM25、dense、RRF、CrossEncoder relevance gate 和 MMR；
-- dense 运行时对 scope 内向量执行确定性的 NumPy exact scan，代价为 <code>O(|scope| * d)</code> 点积加 <code>O(|scope| log |scope|)</code> 排序；
-- FAISS 文件属于版本化检索 artifact 和后续 ANN 载体，当前请求路径不调用 FAISS ANN search；
-- 缺模型快照、维度不一致、索引 hash 漂移或 evidence-state 不一致时 readiness 失败。
-
-是否引入向量数据库或 ANN，应由真实语料规模、scope 大小和 p50/p95 benchmark 决定，而不是为了增加技术名词。
-
-### 回答可信
-
-- ClaimAtom 比较 subject、predicate、value、unit、conditions、scope、temporal 和 comparator；
-- <code>equals</code>、<code>at_least</code>、<code>at_most</code>、<code>before</code>、<code>after</code> 等方向性语义按事实类型 fail closed；
-- claim 必须绑定可追溯 fact 和 evidence，来源冲突或证据不足时拒绝输出确定性结论；
-- 文档文本只作为数据，不能修改工具 schema、调用函数、生成 SQL 或覆盖系统约束。
-
-### 发布可信
-
-一次可运行知识库被定义为一个 content-addressed release，SQLite、检索 artifact、数据 manifest、模型快照摘要和 Git provenance 不能拆开替换。正式晋级流程是：
-
-~~~text
-clean Git candidate build
-  -> restricted frozen holdout agent evaluation
-  -> restricted frozen holdout retrieval evaluation
-  -> fixed promotion-policy validation
-  -> Ed25519 evaluation attestation
-  -> atomic active.json promotion
-  -> runtime re-verification
-~~~
-
-<code>scripts.build_all --release-tier production</code> 会直接拒绝。只有签名评测证明与候选 release、受限 holdout、模型、评测代码 commit 和两份报告完全绑定后，<code>scripts.promote_release</code> 才能更新 active pointer。
-
-## 本地开发
-
-### 运行测试
-
-~~~powershell
-uv sync --locked --extra dev --extra ingest
-uv run python -m ruff check agent academic app evidence generation ingest query retrieval storage scripts eval tests/canonical
-uv run python -m mypy agent academic app evidence generation ingest query retrieval storage scripts eval
-uv run python -m pytest -q tests/canonical
-~~~
-
-CI 在 Python 3.10 和 3.12 上执行 lint、mypy、compile、合成数据构建、数据完整性校验、agent fixture evaluation、lexical / deterministic hybrid evaluation、完整 canonical tests 和 Docker 依赖 smoke。公开 hybrid fixture 使用确定性本地 encoder / reranker，只验证融合、scope、hard negative、provenance 和失效合约，不代表真实模型效果。
-
-### 启动 HTTP 服务
-
-先从公开合成 fixture 生成一个可保留的演示数据库，再以 lexical 诊断模式启动：
+先生成一个可保留的演示数据库：
 
 ~~~powershell
 uv run python -m scripts.run_demo --database-out data/demo.sqlite3
@@ -120,76 +147,149 @@ $env:SWUFE_RETRIEVAL_MODE="lexical"
 uv run python -m app.server
 ~~~
 
-API 文档位于 <code>http://127.0.0.1:8000/docs</code>。主要接口：
+打开：
 
-- <code>GET /options</code>
-- <code>POST /ask</code>
-- <code>GET /source/{chunk_id}</code>
-- <code>GET /academic-audit/options</code>
-- <code>POST /academic-audit</code>
-- <code>GET /health/live</code>
-- <code>GET /health/ready</code>
+- Swagger：<http://127.0.0.1:8000/docs>
+- OpenAPI：<http://127.0.0.1:8000/openapi.json>
+- Liveness：<http://127.0.0.1:8000/health/live>
+- Readiness：<http://127.0.0.1:8000/health/ready>
 
-<code>agent.mcp.MCPAdapter</code> 是与 HTTP 共用 ToolRegistry 的 typed adapter，不包含 MCP server、transport 或远程部署能力。
+## 🔌 HTTP API
 
-## 从候选构建到签名晋级
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| <code>GET</code> | <code>/options</code> | 获取数据集、届别、学院和专业选项 |
+| <code>POST</code> | <code>/ask</code> | 自然语言教务问答 |
+| <code>GET</code> | <code>/source/{chunk_id}</code> | 查看来源标题、页码和证据片段 |
+| <code>GET</code> | <code>/academic-audit/options</code> | 获取学业审计范围 |
+| <code>POST</code> | <code>/academic-audit</code> | 根据已修课程计算培养方案完成度 |
+| <code>GET</code> | <code>/health/live</code> | 检查服务进程 |
+| <code>GET</code> | <code>/health/ready</code> | 检查数据库、release 与检索组件 |
 
-学校数据、受限 holdout 和本地模型路径均由部署方提供。以下命令展示合约，尖括号内容不是仓库内置资源。
-
-~~~powershell
-uv sync --locked --extra retrieval
-uv run python -m scripts.build_all --catalog data/released/curriculum_catalog.json --sources data/released/sources.csv --chunks data/released/chunks.jsonl --source-review data/released/source_review.csv --evidence-review data/released/evidence_review.csv --source-root data/released/raw --retrieval-mode hybrid --embedding-model <local-embedding-snapshot> --reranker-model <local-reranker-snapshot> --holdout-manifest <restricted-holdout/manifest.json>
-~~~
-
-候选输出中的 <code>release_id</code> 决定后续 manifest 路径：
+最小请求：
 
 ~~~powershell
-uv run python -m eval.run_agent_eval --candidate-release-manifest artifacts/releases/<release-id>/release_manifest.json --holdout-manifest <restricted-holdout/manifest.json> --output <restricted-reports/agent.json>
-uv run python -m eval.run_retrieval_ablation --candidate-release-manifest artifacts/releases/<release-id>/release_manifest.json --holdout-manifest <restricted-holdout/manifest.json> --output <restricted-reports/retrieval.json>
-$env:SWUFE_RELEASE_ATTESTATION_PRIVATE_KEY="<base64-ed25519-private-key>"
-uv run python -m scripts.create_eval_attestation --candidate-release-manifest artifacts/releases/<release-id>/release_manifest.json --agent-report <restricted-reports/agent.json> --retrieval-report <restricted-reports/retrieval.json> --issuer <issuer-name> --output <restricted-reports/attestation.json>
-$env:SWUFE_RELEASE_ATTESTATION_PUBLIC_KEY="<base64-ed25519-public-key>"
-uv run python -m scripts.promote_release --release-id <release-id> --attestation <restricted-reports/attestation.json> --trusted-issuer <issuer-name>
+curl.exe -X POST http://127.0.0.1:8000/ask `
+  -H "Content-Type: application/json" `
+  -d '{"question":"2024级测试专业X的测试算法多少学分，在哪个学期开设？"}'
 ~~~
 
-完整约束见 [release 合约](docs/RELEASES.md) 和 [评测合约](docs/EVALUATION.md)。
+主要响应字段：
 
-## 部署边界
+- <code>answer_md</code>：Markdown 格式答案；
+- <code>citations</code>：来源标题、证据片段和物理页码；
+- <code>claims</code>：回答声明及其绑定的事实与证据；
+- <code>refused</code>：是否拒绝返回确定性答案；
+- <code>clarification</code>：需要补充的届别、专业或时间信息。
 
-<code>SWUFE_DEPLOYMENT_MODE=production</code> 会强制认证，并禁止加载未签名的 active release。运行时还需要配置可信 attestation 公钥和 issuer。内置 static bearer 适合受控演示；正式公网部署应由网关或可信 principal resolver 接入组织 SSO。
+### 可选模型表达
 
-模型身份由 release 中的目录摘要绑定；<code>SWUFE_EMBEDDING_MODEL</code> 和 <code>SWUFE_RERANKER_MODEL</code> 只负责把同一份摘要匹配的快照定位到当前主机或容器路径。路径可变，模型内容不能漂移。
+配置 OpenAI-compatible provider 后，可以使用外部模型参与问题理解和答案表达：
 
-默认 session store 是有界、带 TTL 的进程内实现。设置 <code>SWUFE_SESSION_BACKEND=redis</code> 和 <code>SWUFE_REDIS_URL</code> 后，可使用共享 Redis session；Redis 不负责检索缓存，也没有实现分布式 rate limiter。缓存若加入，key 必须包含 dataset version、scope、as-of、模型 / index 版本和 principal，避免旧数据或越权结果复用。
+~~~powershell
+$env:SWUFE_LLM_BASE_URL="https://api.example.com/v1"
+$env:SWUFE_LLM_MODEL="your-model"
+~~~
 
-源码环境启用 Redis 前需执行 <code>uv sync --locked --extra redis</code>；Docker 镜像已经包含该 optional dependency。
+请求时通过 <code>X-LLM-API-Key</code> 传入当前调用使用的 Key。
 
-当前 rate limit 和 concurrency gate 是单进程边界；多实例部署需要在网关层提供全局限流。debug 响应默认关闭，只有已认证 admin、请求 <code>debug=true</code> 且 <code>SWUFE_ENABLE_DEBUG_RESPONSES=true</code> 时才返回受限执行信息。
+## 🔄 数据构建与发布
 
-配置项见 [.env.example](.env.example)，容器示例见 [docker-compose.yml](docker-compose.yml)，安全说明见 [docs/SECURITY.md](docs/SECURITY.md)。
+项目把原始资料、结构化目录、检索产物和运行版本组织为一条连续的数据生命周期：
 
-## 仓库导航
+~~~mermaid
+flowchart LR
+    A["PDF / DOCX / 来源登记"] --> P["解析、切分与质量记录"]
+    P --> C["目录审核与字段物化"]
+    C --> DB[("SQLite")]
+    P --> K["制度知识块"]
+    K --> I["词法 / 稠密检索产物"]
+    DB --> R["Candidate Release"]
+    I --> R
+    R --> E["Agent / Retrieval Evaluation"]
+    E --> S["Ed25519 Attestation"]
+    S --> ACTIVE["active.json"]
+~~~
+
+数据包由以下部分组成：
+
+- <code>sources.csv</code>：来源、版本、适用范围和文件身份；
+- <code>chunks.jsonl</code>：制度文本、表格片段、页码和来源定位；
+- <code>curriculum_catalog.json</code>：培养方案、课程、模块与毕业要求；
+- <code>source_review.csv</code>：来源审核记录；
+- <code>evidence_review.csv</code>：字段与证据审核记录；
+- <code>raw/</code>：与登记摘要一致的原始材料；
+- 检索产物：文档顺序、向量矩阵、索引和模型信息。
+
+| 阶段 | 入口 | 产物 |
+| --- | --- | --- |
+| 数据导入 | <code>scripts.download_dataset</code> | <code>data/released/</code> 数据包 |
+| 文档解析 | <code>ingest</code> / <code>scripts.extract_catalog</code> | chunks、页面与表格质量记录 |
+| Catalog 物化 | <code>scripts.materialize_catalog</code> | 课程、模块、要求与字段来源 |
+| 候选构建 | <code>scripts.build_all</code> | <code>artifacts/releases/&lt;release-id&gt;/</code> |
+| 完整性检查 | <code>scripts.verify_dataset</code> | 数据、引用和来源一致性结果 |
+| 评测 | <code>eval.run_agent_eval</code> / <code>eval.run_retrieval_ablation</code> | Agent 与检索报告 |
+| 签名与晋级 | <code>scripts.create_eval_attestation</code> / <code>scripts.promote_release</code> | 签名证明与 <code>active.json</code> |
+
+<code>active.json</code> 指向服务启动时加载的数据版本。完整参数、数据包格式和签名格式见 [数据模型](docs/DATA_MODEL.md)、[发布合约](docs/RELEASES.md) 与 [评测说明](docs/EVALUATION.md)。
+
+## ⚙️ 常用配置
+
+| 配置项 | 用途 |
+| --- | --- |
+| <code>SWUFE_ACADEMIC_DATABASE</code> | 指定 SQLite 数据库 |
+| <code>SWUFE_RELEASE_ROOT</code> | 指定版本化 release 根目录 |
+| <code>SWUFE_RETRIEVAL_MODE</code> | 选择 <code>lexical</code> 或 <code>hybrid</code> |
+| <code>SWUFE_RETRIEVAL_ARTIFACT_ROOT</code> | 指定检索产物目录 |
+| <code>SWUFE_EMBEDDING_MODEL</code> | 指定本地 embedding 模型快照 |
+| <code>SWUFE_RERANKER_MODEL</code> | 指定本地 reranker 模型快照 |
+| <code>SWUFE_LLM_BASE_URL</code> | OpenAI-compatible API 地址 |
+| <code>SWUFE_LLM_MODEL</code> | 外部模型名称 |
+| <code>SWUFE_SESSION_BACKEND</code> | 选择 <code>memory</code> 或 <code>redis</code> |
+| <code>SWUFE_REDIS_URL</code> | Redis 连接地址 |
+
+完整配置示例见 [.env.example](.env.example)。
+
+## 📂 项目结构
 
 ~~~text
-academic/    SQLite projection、scope-aware repositories、typed tools
-agent/       bounded runtime、planner execution、coverage、session、MCP adapter
-app/server/  FastAPI contract、auth/debug/resource boundaries
-evidence/    Fact、DerivedFact、EvidencePacket、ClaimAtom、provenance
-generation/ deterministic / optional LLM synthesis and claim validation
-ingest/      source parsing、quality ledger、catalog review/materialization
-query/       understanding、normalization、scope and execution planning
-retrieval/   lexical、scoped dense、RRF、reranker、MMR、artifact validation
-storage/     strict JSON、Git provenance、content-addressed release、attestation
-eval/        diagnostic fixture evaluation and promotion-policy validation
-scripts/     build、verify、demo、attest and promote commands
-tests/       synthetic canonical contract suite
-docs/        architecture、security、evaluation、release and interview guide
+academic/    课程、培养要求、来源版本与类型化 SQLite 工具
+agent/       有界运行时、ToolRegistry、coverage、session 与 MCP adapter
+app/server/  FastAPI 服务、认证、资源控制与健康检查
+evidence/    Fact、DerivedFact、EvidencePacket、ClaimAtom 与 provenance
+generation/ 回答合成、渲染、声明语义和引用校验
+ingest/      PDF / DOCX 解析、质量账本、catalog 审核与物化
+query/       问题理解、实体归一化、作用域和 DAG 计划
+retrieval/   BM25、作用域稠密检索、RRF、CrossEncoder、MMR 与索引产物
+storage/     JSON 合约、Git provenance、content-addressed release 与 attestation
+eval/        Agent、检索、泛化和 promotion-policy 评测
+scripts/     数据导入、构建、校验、演示、签名和晋级命令
+tests/       合成数据与 canonical contract tests
+docs/        架构、数据、检索、评测、发布与安全说明
 ~~~
 
-## 如何在简历和面试中描述
+## 🧪 测试与验证
 
-推荐定位是“证据约束、可审计的 SQL + scoped policy RAG 工程原型”，不是“已上线的学校生产知识库”。可验证亮点、常见追问和回答边界整理在 [面试指南](docs/INTERVIEW_GUIDE.md)。
+~~~powershell
+uv sync --locked --extra dev --extra ingest
 
-代码使用 [MIT License](LICENSE)。学校正式资料、受限 holdout、学生数据和第三方模型不随代码授权，详见 [DATA_NOTICE.md](DATA_NOTICE.md)。
+uv run python -m ruff check agent academic app evidence generation ingest query retrieval storage scripts eval tests/canonical
+uv run python -m mypy agent academic app evidence generation ingest query retrieval storage scripts eval
+uv run python -m pytest -q tests/canonical
+~~~
 
-README 中的 build、eval、demo 和 promotion 命令面向源码 checkout；构建出的 wheel 只包含运行时库，不是数据、评测夹具和运维 CLI 的完整分发物。
+GitHub Actions 在 Python 3.10 和 3.12 上执行代码检查、类型检查、数据构建、完整性验证、Agent 与检索评测、端到端演示、canonical tests 和 hybrid Docker 镜像验证。
+
+## 📚 进一步阅读
+
+- [系统架构](docs/ARCHITECTURE.md)：请求链路、运行时与证据模型；
+- [数据模型](docs/DATA_MODEL.md)：课程、培养要求、来源和字段 lineage；
+- [Agent Runtime](docs/AGENT_RUNTIME.md)：状态机、计划、工具与会话；
+- [检索设计](docs/RETRIEVAL.md)：作用域过滤、混合检索与排序；
+- [评测说明](docs/EVALUATION.md)：Agent、检索和发布评测；
+- [发布合约](docs/RELEASES.md)：candidate、attestation 与 active release；
+- [安全设计](docs/SECURITY.md)：认证、BYOK、资源控制与提示注入防护。
+
+## License
+
+代码使用 [MIT License](LICENSE)。数据文件、模型快照与第三方材料的许可说明见 [DATA_NOTICE.md](DATA_NOTICE.md)。
