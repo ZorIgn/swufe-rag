@@ -403,10 +403,13 @@ def test_session_backend_failure_is_reported_as_503(
     monkeypatch,
 ) -> None:
     class FailingSessions:
+        def begin(self, session_id: str) -> str:
+            raise SessionStoreError("backend unavailable")
+
         def get(self, session_id: str):
             raise SessionStoreError("backend unavailable")
 
-        def put(self, session_id: str, value: dict[str, object]) -> None:
+        def put(self, session_id: str, value: dict[str, object], *, expected_token=None) -> None:
             raise SessionStoreError("backend unavailable")
 
     runtime = AgentRuntime(

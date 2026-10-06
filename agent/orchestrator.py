@@ -138,6 +138,7 @@ class AgentRuntime:
             if model is not None
             else self._deps.synthesizer
         )
+        session_token = self._deps.sessions.begin(session_id) if session_id else None
         previous = self._deps.sessions.get(session_id) if session_id else None
         if session_id:
             self._deps.tracer.increment("session_hit_total" if previous else "session_miss_total")
@@ -237,9 +238,7 @@ class AgentRuntime:
                     query=normalized,
                     operations=combined_operations,
                     output_contract=repair_plan.output_contract,
-                    rationale=tuple(
-                        dict.fromkeys((*plan.rationale, *repair_plan.rationale))
-                    ),
+                    rationale=tuple(dict.fromkeys((*plan.rationale, *repair_plan.rationale))),
                 )
                 state.plan = plan
                 state.evidence = packet
@@ -281,6 +280,7 @@ class AgentRuntime:
                     "program_id": normalized.program_ids[0] if normalized.program_ids else None,
                     "cohort": normalized.cohort,
                 },
+                expected_token=session_token,
             )
         return answer, state
 
@@ -310,9 +310,7 @@ class AgentRuntime:
                 )
         return packet
 
-    def _clarify(
-        self, state: AgentState, query: NormalizedQuery
-    ) -> tuple[FinalAnswer, AgentState]:
+    def _clarify(self, state: AgentState, query: NormalizedQuery) -> tuple[FinalAnswer, AgentState]:
         state.transition(AgentStatus.CLARIFY)
         answer = self._deps.synthesizer.synthesize(
             query,
@@ -386,13 +384,9 @@ class AgentRuntime:
 
         query = cls._normalized_query(state)
         unavailable = tuple(
-            contract.output
-            for contract in state.output_contracts
-            if contract.status != "fulfilled"
+            contract.output for contract in state.output_contracts if contract.status != "fulfilled"
         )
-        has_fulfilled = any(
-            contract.status == "fulfilled" for contract in state.output_contracts
-        )
+        has_fulfilled = any(contract.status == "fulfilled" for contract in state.output_contracts)
         return query.model_copy(
             update={
                 "missing_fields": () if has_fulfilled else query.missing_fields,

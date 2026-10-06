@@ -8,6 +8,7 @@ the decision to deploy Redis to the operator.
 
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass
 from typing import Literal
@@ -37,7 +38,7 @@ def _bounded_float(name: str, default: float, *, minimum: float, maximum: float)
         value = float(os.getenv(name, str(default)))
     except (TypeError, ValueError):
         return default
-    if value < minimum or value > maximum:
+    if not math.isfinite(value) or value < minimum or value > maximum:
         return default
     return value
 
@@ -98,6 +99,7 @@ class DeploymentPolicy:
     rate_limit_max_keys: int = 10_000
     rate_limit_key_max_chars: int = 256
     max_concurrent_requests: int = 32
+    request_body_timeout_seconds: float = 10.0
     request_queue_timeout_seconds: float = 0.25
     provider_timeout_seconds: float = 45.0
     provider_max_retries: int = 2
@@ -111,18 +113,15 @@ class DeploymentPolicy:
         mode: Literal["local", "production"] = (
             "production" if configured_mode == "production" else "local"
         )
-        require_authentication = (
-            mode == "production" or _bounded_bool("SWUFE_REQUIRE_AUTHENTICATION", False)
+        require_authentication = mode == "production" or _bounded_bool(
+            "SWUFE_REQUIRE_AUTHENTICATION", False
         )
         return cls(
             deployment_mode=mode,
             require_authentication=require_authentication,
-            debug_responses_enabled=_bounded_bool(
-                "SWUFE_ENABLE_DEBUG_RESPONSES", False
-            ),
+            debug_responses_enabled=_bounded_bool("SWUFE_ENABLE_DEBUG_RESPONSES", False),
             allow_anonymous_sessions=(
-                mode == "local"
-                and _bounded_bool("SWUFE_ALLOW_ANONYMOUS_SESSIONS", False)
+                mode == "local" and _bounded_bool("SWUFE_ALLOW_ANONYMOUS_SESSIONS", False)
             ),
             request_max_bytes=_bounded_int(
                 "SWUFE_REQUEST_MAX_BYTES", 32 * 1024, minimum=1, maximum=16 * 1024 * 1024
@@ -139,15 +138,16 @@ class DeploymentPolicy:
             max_concurrent_requests=_bounded_int(
                 "SWUFE_MAX_CONCURRENT_REQUESTS", 32, minimum=1, maximum=256
             ),
+            request_body_timeout_seconds=_bounded_float(
+                "SWUFE_BODY_TIMEOUT_SECONDS", 10.0, minimum=0.001, maximum=300.0
+            ),
             request_queue_timeout_seconds=_bounded_float(
                 "SWUFE_REQUEST_QUEUE_TIMEOUT_SECONDS", 0.25, minimum=0.0, maximum=30.0
             ),
             provider_timeout_seconds=_bounded_float(
                 "SWUFE_LLM_TIMEOUT_SECONDS", 45.0, minimum=0.1, maximum=300.0
             ),
-            provider_max_retries=_bounded_int(
-                "SWUFE_LLM_MAX_RETRIES", 2, minimum=0, maximum=5
-            ),
+            provider_max_retries=_bounded_int("SWUFE_LLM_MAX_RETRIES", 2, minimum=0, maximum=5),
             provider_max_tokens=_bounded_int(
                 "SWUFE_LLM_MAX_TOKENS", 1200, minimum=1, maximum=16_000
             ),

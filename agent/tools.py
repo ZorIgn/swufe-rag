@@ -8,12 +8,14 @@ dependency has succeeded.
 
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from enum import Enum
 from inspect import Parameter, signature
+from threading import BoundedSemaphore
 from time import monotonic
 from typing import TYPE_CHECKING, Literal, cast
 
@@ -139,10 +141,44 @@ def _merge(
     )
 
 
+class ToolCapacityExceeded(RuntimeError):
+    """All process tool workers are still occupied, including timed-out calls."""
+
+
+class BoundedToolPool:
+    """No unbounded queue; permits belong to actual futures, not HTTP responses."""
+
+    def __init__(self, workers: int) -> None:
+        if not 1 <= workers <= 64:
+            raise ValueError("tool worker count must be between 1 and 64")
+        self._permits = BoundedSemaphore(workers)
+        self._executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="academic-tool")
+
+    def submit(self, fn: Callable[..., EvidencePacket], *args: object) -> Future[EvidencePacket]:
+        if not self._permits.acquire(blocking=False):
+            raise ToolCapacityExceeded("tool worker capacity exhausted")
+        try:
+            future = self._executor.submit(fn, *args)
+        except BaseException:
+            self._permits.release()
+            raise
+        future.add_done_callback(lambda _future: self._permits.release())
+        return future
+
+    def shutdown(self) -> None:
+        self._executor.shutdown(wait=True, cancel_futures=True)
+
+
+_TOOL_POOL = BoundedToolPool(int(os.environ.get("SWUFE_TOOL_WORKERS", "8")))
+
+
 class PlanExecutor:
     """Execute a typed DAG through registered, read-only tools only."""
 
-    def __init__(self, registry: ToolRegistry, policy: RuntimePolicy) -> None:
+    def __init__(
+        self, registry: ToolRegistry, policy: RuntimePolicy, *, pool: BoundedToolPool | None = None
+    ) -> None:
+        self.pool = pool or _TOOL_POOL
         self.registry = registry
         self.policy = policy
         if self.registry.operation_types() != ALL_OPERATION_TYPES:
@@ -210,8 +246,7 @@ class PlanExecutor:
             return _merge(packets_by_operation, execution_results, plan.plan_id, tuple(warnings))
 
         plan_deadline = plan_started_at + max(0.0, self.policy.tool_timeout_seconds)
-        worker_count = max(1, min(len(operations) or 1, self.policy.max_tool_calls))
-        executor = ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="academic-tool")
+        executor = self.pool
         running: dict[Future[EvidencePacket], _RunningTool] = {}
         try:
             while True:
@@ -309,7 +344,16 @@ class PlanExecutor:
                     context = self._context_for(
                         plan, operation, packets_by_operation, operations_by_id
                     )
-                    future = executor.submit(self._execute_one, operation, context)
+                    try:
+                        future = executor.submit(self._execute_one, operation, context)
+                    except ToolCapacityExceeded:
+                        record(
+                            operation,
+                            state=_ExecutionState.FAILED,
+                            status="failed",
+                            error_code="tool_capacity_exceeded",
+                        )
+                        continue
                     running[future] = _RunningTool(
                         operation=operation,
                         started_at=started_at,
@@ -388,10 +432,9 @@ class PlanExecutor:
                             started_at=started.started_at,
                         )
         finally:
-            # Do not let a timed-out callback block the agent response while it
-            # unwinds. Queued work is cancelled; a running Python thread cannot
-            # be forcibly stopped and is ignored after its typed timeout result.
-            executor.shutdown(wait=False, cancel_futures=True)
+            # Cancellation releases a permit only if the future really stops.
+            for future in running:
+                future.cancel()
 
         return _merge(packets_by_operation, execution_results, plan.plan_id, tuple(warnings))
 
@@ -483,9 +526,7 @@ def _semester_number(value: object) -> int | None:
     return int(match.group(1)) if match else None
 
 
-def _fact_value(
-    values: dict[str, Fact | DerivedFact], predicate: str
-) -> object | None:
+def _fact_value(values: dict[str, Fact | DerivedFact], predicate: str) -> object | None:
     fact = values.get(predicate)
     return fact.value if fact is not None else None
 
@@ -531,15 +572,11 @@ def _pack_course_groups(
     warning_codes: tuple[str, ...] = (),
 ) -> EvidencePacket:
     facts = tuple(
-        fact
-        for subject in sorted(selected_subjects)
-        for fact in groups.get(subject, {}).values()
+        fact for subject in sorted(selected_subjects) for fact in groups.get(subject, {}).values()
     )
     evidence_ids = {evidence_id for fact in facts for evidence_id in fact.evidence_ids}
     evidence_by_id = {
-        evidence.evidence_id: evidence
-        for packet in source_packets
-        for evidence in packet.evidence
+        evidence.evidence_id: evidence for packet in source_packets for evidence in packet.evidence
     }
     source_components = tuple(
         component
@@ -547,7 +584,9 @@ def _pack_course_groups(
         for component in packet.coverage.components
         if component.kind == "course_set"
     )
-    complete = bool(source_components) and all(component.complete for component in source_components)
+    complete = bool(source_components) and all(
+        component.complete for component in source_components
+    )
     trusted = bool(source_components) and all(
         component.trusted_evidence is not False for component in source_components
     )
@@ -674,17 +713,13 @@ def standard_registry(academic: AcademicTools, policy: RuntimePolicy) -> ToolReg
             subject
             for subject, values in groups.items()
             if subject not in completed
-            and _semester_number(_fact_value(values, "semester"))
-            is None
+            and _semester_number(_fact_value(values, "semester")) is None
         }
         selected = {
             subject
             for subject, values in groups.items()
             if subject not in completed
-            and (
-                semester := _semester_number(_fact_value(values, "semester"))
-            )
-            is not None
+            and (semester := _semester_number(_fact_value(values, "semester"))) is not None
             and semester < operation.args.deadline_semester
         }
         return _pack_course_groups(
@@ -711,8 +746,7 @@ def standard_registry(academic: AcademicTools, policy: RuntimePolicy) -> ToolReg
             for subject, values in groups.items()
             if subject not in completed
             and _is_mandatory_course(values)
-            and _semester_number(_fact_value(values, "semester"))
-            is None
+            and _semester_number(_fact_value(values, "semester")) is None
         }
         # deadline_semester is an exclusive boundary: "before semester 7"
         # means semesters 1-6 are usable and semester 7 itself is already late.
@@ -721,10 +755,7 @@ def standard_registry(academic: AcademicTools, policy: RuntimePolicy) -> ToolReg
             for subject, values in groups.items()
             if subject not in completed
             and _is_mandatory_course(values)
-            and (
-                semester := _semester_number(_fact_value(values, "semester"))
-            )
-            is not None
+            and (semester := _semester_number(_fact_value(values, "semester"))) is not None
             and semester >= operation.args.after_semester
         }
         return _pack_course_groups(
@@ -733,9 +764,7 @@ def standard_registry(academic: AcademicTools, policy: RuntimePolicy) -> ToolReg
             source_packets=catalog_packets,
             groups=groups,
             selected_subjects=selected,
-            warning_codes=("mandatory_course_semester_unresolved",)
-            if unresolved_mandatory
-            else (),
+            warning_codes=("mandatory_course_semester_unresolved",) if unresolved_mandatory else (),
         )
 
     def feasibility(
@@ -788,9 +817,7 @@ def standard_registry(academic: AcademicTools, policy: RuntimePolicy) -> ToolReg
         }
         requested_completed_ids = set(operation.args.completed_course_ids)
         before_groups = _course_groups(() if before_packet is None else (before_packet,))
-        blocker_groups = _course_groups(
-            () if unavoidable_packet is None else (unavoidable_packet,)
-        )
+        blocker_groups = _course_groups(() if unavoidable_packet is None else (unavoidable_packet,))
 
         facts: list[Fact | DerivedFact] = []
         evidence_by_id = {

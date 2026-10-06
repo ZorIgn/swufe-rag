@@ -9,6 +9,7 @@ from hashlib import sha256
 from threading import Lock
 from time import monotonic
 from typing import Any
+from uuid import uuid4
 
 from storage.json_contract import StrictJSONError, loads_strict_json
 
@@ -71,6 +72,7 @@ class InMemoryTTLSessionStore:
     max_payload_bytes: int = 16 * 1024
     dataset_version: str = "unknown"
     _values: dict[str, tuple[float, dict[str, object]]] = field(default_factory=dict)
+    _requests: dict[str, tuple[float, str]] = field(default_factory=dict)
     _lock: Lock = field(default_factory=Lock, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -84,12 +86,15 @@ class InMemoryTTLSessionStore:
         for key, (expires, _) in tuple(self._values.items()):
             if expires <= now:
                 self._values.pop(key, None)
+        for key, (expires, _) in tuple(self._requests.items()):
+            if expires <= now:
+                self._requests.pop(key, None)
+        while len(self._requests) > self.max_sessions:
+            self._requests.pop(next(iter(self._requests)))
         while len(self._values) > self.max_sessions:
             self._values.pop(next(iter(self._values)))
 
-    def get(
-        self, session_id: str, *, principal_id: str | None = None
-    ) -> dict[str, object] | None:
+    def get(self, session_id: str, *, principal_id: str | None = None) -> dict[str, object] | None:
         key = scoped_session_id(session_id, principal_id)
         with self._lock:
             self._purge()
@@ -102,12 +107,22 @@ class InMemoryTTLSessionStore:
                 return None
             return dict(value)
 
+    def begin(self, session_id: str, *, principal_id: str | None = None) -> str:
+        key = scoped_session_id(session_id, principal_id)
+        token = uuid4().hex
+        with self._lock:
+            self._purge()
+            self._requests[key] = (monotonic() + self.ttl_seconds, token)
+            self._purge()
+        return token
+
     def put(
         self,
         session_id: str,
         value: dict[str, object],
         *,
         principal_id: str | None = None,
+        expected_token: str | None = None,
     ) -> None:
         key = scoped_session_id(session_id, principal_id)
         safe, _ = _encoded_session(
@@ -117,6 +132,11 @@ class InMemoryTTLSessionStore:
             max_payload_bytes=self.max_payload_bytes,
         )
         with self._lock:
+            self._purge()
+            if expected_token is not None and self._requests.get(key, (0, ""))[1] != expected_token:
+                return
+            if expected_token is None:
+                self._requests.pop(key, None)
             self._values[key] = (monotonic() + self.ttl_seconds, safe)
             self._purge()
 
@@ -188,9 +208,7 @@ class RedisSessionStore:
             # remove it even if this best-effort cleanup cannot reach Redis.
             return
 
-    def get(
-        self, session_id: str, *, principal_id: str | None = None
-    ) -> dict[str, object] | None:
+    def get(self, session_id: str, *, principal_id: str | None = None) -> dict[str, object] | None:
         key = self._key(session_id, principal_id)
         try:
             raw = self._client.get(key)
@@ -224,12 +242,23 @@ class RedisSessionStore:
             return None
         return value
 
+    def begin(self, session_id: str, *, principal_id: str | None = None) -> str:
+        token = uuid4().hex
+        try:
+            self._client.setex(
+                self._key(session_id, principal_id) + ":request", self._ttl_seconds, token
+            )
+        except Exception as exc:
+            raise SessionStoreError("Redis session reservation failed") from exc
+        return token
+
     def put(
         self,
         session_id: str,
         value: dict[str, object],
         *,
         principal_id: str | None = None,
+        expected_token: str | None = None,
     ) -> None:
         _, encoded = _encoded_session(
             value,
@@ -238,6 +267,20 @@ class RedisSessionStore:
             max_payload_bytes=self._max_payload_bytes,
         )
         try:
+            key = self._key(session_id, principal_id)
+            if expected_token is not None:
+                self._client.eval(
+                    "if redis.call('GET', KEYS[2]) == ARGV[1] then "
+                    "redis.call('SETEX', KEYS[1], ARGV[2], ARGV[3]); return 1 end; return 0",
+                    2,
+                    key,
+                    key + ":request",
+                    expected_token,
+                    self._ttl_seconds,
+                    encoded,
+                )
+                return
+            self._client.delete(key + ":request")
             self._client.setex(
                 self._key(session_id, principal_id),
                 self._ttl_seconds,

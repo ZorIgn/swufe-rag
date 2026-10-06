@@ -100,7 +100,9 @@ class RateLimiter:
             while len(self._values) >= capacity and normalized not in self._values:
                 self._values.pop(next(iter(self._values)))
             values = [
-                item for item in self._values.get(normalized, []) if item > now - self.window_seconds
+                item
+                for item in self._values.get(normalized, [])
+                if item > now - self.window_seconds
             ]
             if len(values) >= self.maximum:
                 self._values[normalized] = values
@@ -127,9 +129,7 @@ def _valid_principal(value: object) -> Principal | None:
         or len(principal.tenant) > 128
         or any(ord(char) < 32 for char in principal.subject + principal.tenant)
         or any(
-            not role
-            or len(role) > 64
-            or any(ord(char) < 32 for char in role)
+            not role or len(role) > 64 or any(ord(char) < 32 for char in role)
             for role in principal.roles
         )
     ):
@@ -255,8 +255,7 @@ def _public(
                         for operation in plan.operations
                     ],
                     "output_contract": [
-                        item.model_dump(mode="json")
-                        for item in state.output_contracts
+                        item.model_dump(mode="json") for item in state.output_contracts
                     ],
                 }
             ),
@@ -298,9 +297,7 @@ def create_app(
         and static_token is not None
         and len(static_token) < 32
     ):
-        raise RuntimeError(
-            "production static bearer token must contain at least 32 characters"
-        )
+        raise RuntimeError("production static bearer token must contain at least 32 characters")
     auth_configured = principal_resolver is not None or bool(static_token)
     if deployment_policy.require_authentication and not auth_configured:
         raise RuntimeError(
@@ -351,9 +348,7 @@ def create_app(
             or not hmac.compare_digest(candidate, static_token)
         ):
             return None
-        return _valid_principal(
-            Principal(subject=static_subject, roles=static_roles)
-        )
+        return _valid_principal(Principal(subject=static_subject, roles=static_roles))
 
     def auth_failure(request: Request) -> Any:
         response = JSONResponse(
@@ -404,8 +399,10 @@ def create_app(
         is_health = request.url.path in {"/health/live", "/health/ready"}
         is_preflight = request.method == "OPTIONS"
         principal = None if (is_health or is_preflight) else principal_for(request)
-        if auth_configured and not (is_health or is_preflight) and (
-            principal is None or not principal.authenticated
+        if (
+            auth_configured
+            and not (is_health or is_preflight)
+            and (principal is None or not principal.authenticated)
         ):
             return auth_failure(request)
         request.state.principal = principal
@@ -437,17 +434,6 @@ def create_app(
                             retryable=False,
                         ).model_dump(),
                     )
-            body = await request.body()
-            if len(body) > limit_bytes:
-                return JSONResponse(
-                    status_code=413,
-                    content=ErrorResponse(
-                        request_id=request_id,
-                        error_code="request_too_large",
-                        message="request body is too large",
-                        retryable=False,
-                    ).model_dump(),
-                )
             if not limiter.allow(_client_rate_key(request, principal, trusted_proxies)):
                 return JSONResponse(
                     status_code=429,
@@ -476,6 +462,41 @@ def create_app(
                     ).model_dump(),
                 )
             try:
+                body = bytearray()
+                try:
+
+                    async def read_bounded_body() -> bool:
+                        async for chunk in request.stream():
+                            if len(body) + len(chunk) > limit_bytes:
+                                return False
+                            body.extend(chunk)
+                        return True
+
+                    complete = await asyncio.wait_for(
+                        read_bounded_body(), deployment_policy.request_body_timeout_seconds
+                    )
+                except TimeoutError:
+                    return JSONResponse(
+                        status_code=408,
+                        content=ErrorResponse(
+                            request_id=request_id,
+                            error_code="request_body_timeout",
+                            message="request body read timed out",
+                            retryable=True,
+                        ).model_dump(),
+                    )
+                if not complete:
+                    return JSONResponse(
+                        status_code=413,
+                        content=ErrorResponse(
+                            request_id=request_id,
+                            error_code="request_too_large",
+                            message="request body is too large",
+                            retryable=False,
+                        ).model_dump(),
+                    )
+                # Starlette's cached request replays this bounded body downstream.
+                request._body = bytes(body)
                 response = await call_next(request)
             finally:
                 concurrency.release()
@@ -669,7 +690,8 @@ def create_app(
             answer,
             agent_state,
             debug=request.debug,
-            dataset_version=str(current().repository.metadata().get("dataset_version") or "") or None,
+            dataset_version=str(current().repository.metadata().get("dataset_version") or "")
+            or None,
         )
 
     @application.get("/source/{chunk_id}")
@@ -701,9 +723,7 @@ def create_app(
         return current().options()
 
     @application.post("/academic-audit")
-    def academic_audit(
-        request: AcademicAuditRequest, http_request: Request
-    ) -> Any:
+    def academic_audit(request: AcademicAuditRequest, http_request: Request) -> Any:
         raw_principal = getattr(http_request.state, "principal", None)
         principal = raw_principal if isinstance(raw_principal, Principal) else None
         if (
@@ -758,7 +778,8 @@ def create_app(
             answer,
             agent_state,
             debug=False,
-            dataset_version=str(current().repository.metadata().get("dataset_version") or "") or None,
+            dataset_version=str(current().repository.metadata().get("dataset_version") or "")
+            or None,
         )
 
     return application
