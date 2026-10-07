@@ -451,7 +451,7 @@ def create_app(
                     )
                 else:
                     await concurrency.acquire()
-            except TimeoutError:
+            except asyncio.TimeoutError:
                 return JSONResponse(
                     status_code=503,
                     content=ErrorResponse(
@@ -475,7 +475,7 @@ def create_app(
                     complete = await asyncio.wait_for(
                         read_bounded_body(), deployment_policy.request_body_timeout_seconds
                     )
-                except TimeoutError:
+                except asyncio.TimeoutError:
                     return JSONResponse(
                         status_code=408,
                         content=ErrorResponse(

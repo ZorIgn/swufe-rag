@@ -76,6 +76,52 @@ def test_body_timeout_returns_capacity_and_next_request_succeeds(monkeypatch):
     asyncio.run(run())
 
 
+def test_queue_timeout_keeps_inflight_capacity_and_recovers(monkeypatch):
+    monkeypatch.setenv("SWUFE_MAX_CONCURRENT_REQUESTS", "1")
+    monkeypatch.setenv("SWUFE_REQUEST_QUEUE_TIMEOUT_SECONDS", "0.01")
+    application = create_app(runtime=object())
+    guard = next(
+        m.kwargs["dispatch"] for m in application.user_middleware if "dispatch" in m.kwargs
+    )
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/ask",
+        "headers": [],
+        "client": ("198.51.100.1", 1),
+        "server": ("test", 80),
+        "scheme": "http",
+        "query_string": b"",
+    }
+
+    async def receive():
+        return {"type": "http.request", "body": b"{}", "more_body": False}
+
+    async def run():
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def downstream(request):
+            entered.set()
+            await release.wait()
+            return Response(status_code=200)
+
+        first = asyncio.create_task(guard(Request(scope, receive), downstream))
+        try:
+            await asyncio.wait_for(entered.wait(), 1)
+            # Repeated rejected requests must not release the first request's permit.
+            for _ in range(2):
+                result = await guard(Request(scope, receive), downstream)
+                assert result.status_code == 503
+                assert b"server_busy" in result.body
+        finally:
+            release.set()
+            assert (await first).status_code == 200
+        assert (await guard(Request(scope, receive), downstream)).status_code == 200
+
+    asyncio.run(run())
+
+
 def test_repeated_timeouts_keep_actual_tool_work_bounded_and_recover():
     release = Event()
     started = []
